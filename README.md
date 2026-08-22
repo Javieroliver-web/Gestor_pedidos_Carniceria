@@ -1,119 +1,117 @@
-# Sistema de Pedidos WhatsApp — Carnicería
-## Archivos del proyecto
+# Sistema de Pedidos WhatsApp — Carnicería Bot
 
-```
-C:\Gestor_pedidos_Carniceria\
-├── index.js              ← Servicio principal (WhatsApp + IA + impresora + web)
-├── dashboard.html        ← Panel de pedidos (http://localhost:3000)
-├── package.json          ← Dependencias npm
-├── ecosystem.config.js   ← Configuración de PM2
+Un sistema completo de punto de venta (POS) y recepción de pedidos automatizado vía WhatsApp. Diseñado originalmente para la Carnicería Raúl Oliver, el bot recibe los mensajes, utiliza Inteligencia Artificial (Groq - Llama 3) para extraer los productos y cantidades, y los envía automáticamente a la cola de impresión del local, reflejándolos en un panel de control web en tiempo real.
+
+## Características principales
+- **Extracción por IA:** Entiende lenguaje natural y extrae el JSON del pedido automáticamente.
+- **Panel Web en Tiempo Real:** Interfaz frontend (Dashboard) sincronizada mediante Server-Sent Events (SSE).
+- **Gestión Avanzada de Hardware:** Motor de impresión dual con patrón estrategia. Imprime a bajo nivel en .NET para etiquetas cuadradas térmicas (Ej: Brother TD-4000) o mediante `notepad /pt` para tickets en A4 (Ej: Brother HL-1210W).
+- **Control de WhatsApp desde UI:** Modal integrado para ver el estado del socket, reiniciar el servicio o solicitar un nuevo código QR sin tocar la consola.
+
+---
+
+## Estructura del proyecto
+
+```text
+Gestor_pedidos_Carniceria/
+├── index.js              ← Servicio principal (WhatsApp + IA + Print Engine + Express)
+├── dashboard.html        ← Panel de control frontend (http://localhost:3000)
+├── package.json          ← Dependencias del proyecto
+├── ecosystem.config.js   ← Configuración de despliegue para PM2
 ├── .env                  ← Variables de entorno (crear a partir de .env.example)
 ├── .env.example          ← Plantilla de configuración
 │
-│   (se crean automáticamente al ejecutar)
-├── orders.json           ← Pedidos persistidos
-├── config.json           ← Impresora seleccionada desde el panel
-├── .wwebjs_auth/         ← Sesión de WhatsApp (tras escanear el QR)
-└── node_modules/         ← Dependencias instaladas (tras npm install)
+│   (Se generan automáticamente en ejecución)
+├── orders.json           ← Base de datos JSON de pedidos persistidos
+├── config.json           ← Memoria de impresoras y perfiles de papel
+├── .wwebjs_auth/         ← Sesión encriptada de WhatsApp Web
+└── node_modules/         ← Dependencias
 ```
 
 ---
 
-## Instalación rápida
+## Instalación y despliegue
 
-### 1. Instalar Node.js
-Descargar e instalar la versión LTS desde https://nodejs.org
+### 1. Requisitos previos
+- [Node.js](https://nodejs.org/) (Versión LTS recomendada)
+- Git instalado en el sistema.
 
-### 2. Crear la carpeta y copiar los archivos
-Abrir **cmd como Administrador**:
-```cmd
-mkdir C:\Gestor_pedidos_Carniceria
-cd C:\Gestor_pedidos_Carniceria
+### 2. Clonar el repositorio
+Abre un terminal (PowerShell o CMD) y ejecuta:
+```powershell
+git clone [https://github.com/TU_USUARIO/Gestor_pedidos_Carniceria.git](https://github.com/TU_USUARIO/Gestor_pedidos_Carniceria.git)
+cd Gestor_pedidos_Carniceria
 ```
-Copiar todos los archivos del proyecto en esta carpeta.
 
 ### 3. Instalar dependencias
-```cmd
+```powershell
 npm install
 ```
 
-### 4. Crear el archivo .env
-```cmd
-copy .env.example .env
-notepad .env
-```
-Rellenar:
-```
-ANTHROPIC_API_KEY=sk-ant-XXXXXXXXXXXXXXXX
-PRINTER_INTERFACE=printer:Tickets
-SHOP_NAME=CARNICERÍA RAUL OLIVER
+### 4. Configurar variables de entorno
+Crea un archivo llamado `.env` en la raíz del proyecto (puedes usar el contenido de `.env.example` como plantilla) y añade tus datos. Necesitarás una API Key gratuita de [Groq Console](https://console.groq.com):
+```env
+API_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+PRINTER_INTERFACE=Brother XXXXXXX
+SHOP_NAME="NAME"
+PORT=3000
 ```
 
-### 5. Configurar la impresora térmica (USB)
-1. Conectar la impresora — Windows instala el driver automáticamente
-2. Configuración → Bluetooth y dispositivos → Impresoras
-3. Clic en la impresora → Propiedades → pestaña Compartir
-4. Activar "Compartir esta impresora", nombre de recurso: `Tickets`
-
-### 6. Primera ejecución — escanear el QR
-```cmd
+### 5. Primera ejecución y vinculación
+```powershell
 node index.js
 ```
-Escanear el QR con WhatsApp (Dispositivos vinculados → Vincular un dispositivo).
-Este paso solo se hace una vez. Cuando aparezca "Sistema activo", pulsar Ctrl+C.
+1. En la consola aparecerá un código QR.
+2. Abre WhatsApp en tu móvil > Dispositivos vinculados > Vincular un dispositivo.
+3. Escanea el QR. Cuando leas `WhatsApp conectado`, pulsa `Ctrl + C` para detener el proceso temporalmente.
 
-### 7. Instalar PM2 y activar el arranque automático
-```cmd
+### 6. Puesta en producción (Arranque automático con PM2)
+Para que el bot funcione siempre en segundo plano y se levante solo al encender el PC:
+```powershell
 npm install -g pm2 pm2-windows-startup
 pm2-windows-startup install
-cd C:\carniceria-bot
 pm2 start ecosystem.config.js
 pm2 save
 ```
-
-**A partir de aquí el sistema es completamente automático.**
-El PC arranca → el servicio levanta solo → los pedidos se imprimen solos.
+¡El sistema ya es completamente autónomo!
 
 ---
 
-## Panel de pedidos
-Abrir en el navegador: **http://localhost:3000**
+## Uso del Panel de Control (Dashboard)
+Abre tu navegador en: **http://localhost:3000**
 
-Desde el panel se puede:
-- Ver los pedidos en tiempo real (actualización automática por SSE)
-- Marcar pedidos como **Listo** (preparado) o **Recogido**
-- **Descartar** pedidos (requiere doble confirmación)
-- Ver **fallos de impresión** y **reintentar** desde el panel
-- **Cambiar la impresora** desde el botón de cabecera sin reiniciar el servicio
-
----
-
-## Flujo del sistema
-```
-Cliente → WhatsApp → Filtro regex → Claude IA → Impresora (ticket automático)
-                                              → WhatsApp (confirmación con PIN)
-                                              → Panel web (tarjeta en tiempo real)
-```
+Desde esta interfaz de administrador puedes:
+- Monitorizar la entrada de nuevos pedidos con alertas sonoras.
+- Marcar comandas como **Listo** o **Recogido**.
+- Utilizar el **botón de reimpresión** individual para cada ticket si la máquina falla o se queda sin papel.
+- Abrir el **Modal de Impresora** en la cabecera para cambiar al vuelo entre la máquina térmica y la impresora láser, asignándoles perfiles de papel (`Etiqueta 76x76` o `Folio A4`).
+- Abrir el **Modal de WhatsApp** para desvincular la sesión o reiniciar el socket si hay problemas de conexión.
 
 ---
 
-## Comandos de mantenimiento
-```cmd
-pm2 status                   → estado del servicio
-pm2 logs carniceria-bot      → logs en tiempo real
-pm2 restart carniceria-bot   → reiniciar
-pm2 stop carniceria-bot      → parar
+## Flujo del Sistema
+```text
+Cliente (WhatsApp) 
+  ↳ Filtro Regex local (ignora mensajes no comerciales)
+    ↳ Groq API (Modelo Llama-3-8b: Pasa texto a JSON)
+      ↳ Backend Node.js (Guarda y emite evento SSE)
+        ├── Impresora Local (Motor PowerShell/.NET Raw)
+        ├── Panel Web (Actualiza el DOM en vivo)
+        └── WhatsApp (Responde al cliente con su PIN de recogida)
 ```
 
 ---
 
-## Solución de problemas
+## Mantenimiento y Comandos Útiles
+Si necesitas gestionar el servicio en segundo plano, abre PowerShell:
+```powershell
+pm2 status                  # Ver estado general del bot
+pm2 logs carniceria-bot     # Ver registro de eventos y errores en tiempo real
+pm2 restart carniceria-bot  # Reiniciar el sistema
+```
 
-| Problema | Solución |
-|---|---|
-| Error al imprimir | Verificar impresora encendida. Cambiar desde el panel (botón impresora en cabecera) |
-| QR expirado | Ejecutar `node index.js` de nuevo |
-| WhatsApp desconectado | PM2 reinicia automáticamente. Si persiste: borrar `.wwebjs_auth` y repetir paso 6 |
-| Servicio no arranca con el PC | Ejecutar `pm2-windows-startup install` como Administrador |
-| Mensajes ignorados | Revisar `pm2 logs` y ampliar palabras clave en `ORDER_RE` en `index.js` |
-| El proceso aparece como `errored` | Ejecutar `pm2 logs carniceria-bot --err` para ver el error exacto |
+---
+
+## Autor
+Desarrollado por **Francisco Javier Párraga Oliver**  
+*Backend Software Developer*
