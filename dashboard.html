@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pedidos — Panel</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:#f2ede8; --surface:#fff; --surface2:#f7f3ef; --border:#e0d9d1;
+  --text:#1c1917; --text2:#78716c; --text3:#a8a29e; --header:#1c1917;
+  --green:#16a34a; --green-light:#f0fdf4; --green-mid:#bbf7d0;
+  --amber:#d97706; --amber-light:#fffbeb;
+  --red:#dc2626; --red-light:#fef2f2; --red-mid:#fca5a5;
+}
+body { font-family: system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; font-size:14px; }
+
+/* HEADER */
+.header { background:var(--header); color:#fff; padding:0 20px; height:54px; display:flex; align-items:center; justify-content:space-between; gap:16px; position:sticky; top:0; z-index:100; }
+.header-left  { display:flex; align-items:center; gap:14px; min-width:0; }
+.shop-name    { font-size:14px; font-weight:700; letter-spacing:.4px; white-space:nowrap; }
+
+.hbtn { background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); color:rgba(255,255,255,.9); padding:5px 11px; border-radius:6px; cursor:pointer; font-size:12px; font-weight:500; font-family:inherit; transition:background .15s; display:flex; align-items:center; gap:6px; white-space:nowrap; }
+.hbtn:hover { background:rgba(255,255,255,.18); }
+.hbtn svg   { width:14px; height:14px; flex-shrink:0; }
+.hbtn.warn  { border-color:rgba(252,165,165,.5); color:#fca5a5; }
+
+.status-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; background:#f87171; }
+.status-dot.green { background:#4ade80; }
+.status-dot.yellow { background:#fbbf24; animation:blink 1s ease infinite; }
+.status-dot.red { background:#f87171; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+.header-right { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+.clock { font-family:'Courier New',monospace; font-size:17px; font-weight:700; color:#fff; letter-spacing:1px; min-width:52px; text-align:right; }
+
+/* STATS */
+.stats { background:var(--surface); border-bottom:1px solid var(--border); padding:0 20px; height:56px; display:flex; align-items:center; gap:6px; }
+.stat { display:flex; align-items:center; gap:10px; padding:8px 14px; border-radius:8px; flex-shrink:0; }
+.stat-num   { font-family:'Courier New',monospace; font-size:24px; font-weight:700; line-height:1; }
+.stat-label { font-size:11px; color:var(--text2); line-height:1.3; }
+.stat-pending { background:var(--amber-light); } .stat-pending .stat-num { color:var(--amber); }
+.stat-ready   { background:var(--green-light); } .stat-ready   .stat-num { color:var(--green); }
+.stat-fail    { background:var(--red-light);   } .stat-fail    .stat-num { color:var(--red);   }
+.stat-done    .stat-num { color:var(--text3); }
+.stats-sep  { width:1px; height:28px; background:var(--border); flex-shrink:0; margin:0 4px; }
+.stats-spc  { flex:1; }
+
+/* TABS & GRID */
+.tabs { padding:14px 20px 0; display:flex; gap:4px; }
+.tab  { padding:7px 18px; border-radius:20px; font-size:13px; font-weight:500; cursor:pointer; border:none; background:transparent; color:var(--text2); transition:all .15s; display:flex; align-items:center; gap:6px; font-family:inherit; }
+.tab:hover  { background:#e5ded7; }
+.tab.active { background:var(--header); color:#fff; }
+.tab-badge  { font-size:10px; font-weight:700; background:var(--red); color:#fff; width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; }
+.tab.active .tab-badge { background:rgba(255,255,255,.3); }
+
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(270px,1fr)); gap:12px; padding:14px 20px 24px; align-items:start; }
+
+/* CARD */
+.card { background:var(--surface); border-radius:12px; border:1px solid var(--border); overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.06); transition:box-shadow .2s,transform .2s; animation:cardIn .22s ease; }
+.card:hover { box-shadow:0 4px 12px rgba(0,0,0,.1); transform:translateY(-1px); }
+@keyframes cardIn { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:none} }
+@keyframes boom   { 0%,100%{box-shadow:0 0 0 0 rgba(251,191,36,.5)} 60%{box-shadow:0 0 0 10px rgba(251,191,36,0)} }
+.card.new-flash    { animation:cardIn .22s ease,boom .5s ease 2; }
+.card.status-ready { border-color:var(--green-mid); background:var(--green-light); }
+.card.status-done, .card.status-discarded { opacity:.45; }
+.card.has-print-error { border-color:var(--red-mid) !important; }
+
+.card-pin { background:var(--header); padding:14px 16px 12px; display:flex; align-items:center; justify-content:space-between; }
+.card.status-ready     .card-pin { background:#15803d; }
+.card.status-done      .card-pin, .card.status-discarded .card-pin { background:#57534e; }
+.card.has-print-error  .card-pin { background:#991b1b; }
+.pin-code  { font-family:'Courier New',monospace; font-size:30px; font-weight:700; color:#fff; letter-spacing:7px; line-height:1; }
+.pin-side  { text-align:right; }
+.pin-time  { font-size:11px; color:rgba(255,255,255,.45); font-family:'Courier New',monospace; }
+.status-pill { display:inline-block; margin-top:4px; font-size:9px; font-weight:700; letter-spacing:1px; color:rgba(255,255,255,.7); background:rgba(255,255,255,.12); padding:2px 8px; border-radius:20px; }
+
+.err-banner { background:var(--red-light); border-top:1px solid var(--red-mid); padding:8px 14px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.err-msg    { font-size:11px; color:var(--red); flex:1; min-width:0; line-height:1.4; }
+.err-msg strong { display:block; font-weight:600; margin-bottom:1px; }
+.btn-retry  { flex-shrink:0; padding:5px 11px; border-radius:6px; font-size:11px; font-weight:600; background:var(--red); color:#fff; border:none; cursor:pointer; }
+.btn-retry:hover { background:#b91c1c; }
+
+.card-body  { padding:12px 14px; }
+.card-name  { font-size:14px; font-weight:600; margin-bottom:10px; }
+.items      { display:flex; flex-direction:column; gap:5px; }
+.item       { display:flex; gap:8px; font-size:12px; }
+.item-qty   { color:var(--text2); min-width:68px; flex-shrink:0; font-family:'Courier New',monospace; }
+
+.card-actions { display:flex; gap:6px; padding:8px 14px 12px; }
+.btn { flex:1; padding:9px 8px; border-radius:8px; font-size:12px; font-weight:600; cursor:pointer; border:1px solid var(--border); background:var(--surface2); color:var(--text); transition:all .12s; font-family:inherit; }
+.btn-ready           { background:#fff; }
+.btn-ready:hover     { background:var(--green-light); border-color:var(--green-mid); color:var(--green); }
+.btn-ready.is-done   { background:var(--green); border-color:var(--green); color:#fff; cursor:default; }
+.btn-recogido        { background:#fff; }
+.btn-recogido:hover  { background:var(--red-light); border-color:var(--red-mid); color:var(--red); }
+.btn-discard         { background:#fff; color:var(--text2); max-width:36px; padding:9px 6px; }
+.btn-discard:hover   { background:var(--red-light); border-color:var(--red-mid); color:var(--red); }
+.btn-discard.conf    { max-width:none; background:var(--red); border-color:var(--red); color:#fff; }
+.btn-print           { background:#fff; color:var(--text2); max-width:36px; padding:9px 6px; display:flex; align-items:center; justify-content:center; }
+.btn-print:hover     { background:var(--surface2); color:var(--header); }
+.btn-print svg       { width:16px; height:16px; }
+
+.empty { grid-column:1/-1; text-align:center; padding:64px 20px; color:var(--text3); }
+.empty-icon  { font-size:52px; display:block; margin-bottom:14px; opacity:.25; }
+
+/* ── MODALS ──────────────────────────────────────────────────────────────── */
+.overlay { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:200; display:flex; align-items:center; justify-content:center; padding:20px; animation:fadeIn .15s ease; }
+.overlay.hidden { display:none; }
+@keyframes fadeIn { from{opacity:0} to{opacity:1} }
+.modal { background:var(--surface); border-radius:16px; width:100%; max-width:440px; box-shadow:0 20px 60px rgba(0,0,0,.25); animation:slideUp .2s ease; overflow:hidden; }
+@keyframes slideUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:none} }
+
+.modal-header { padding:18px 20px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+.modal-title  { font-size:15px; font-weight:700; display:flex; align-items:center; gap:8px; }
+.modal-close  { width:32px; height:32px; border-radius:8px; border:none; background:transparent; cursor:pointer; color:var(--text2); transition:background .15s; }
+.modal-close:hover { background:var(--surface2); }
+.modal-body   { padding:20px; max-height:60vh; overflow-y:auto; }
+.modal-footer { padding:16px 20px; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end; }
+.mbtn { padding:9px 18px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; border:1px solid var(--border); background:var(--surface2); color:var(--text); transition:all .12s; font-family:inherit; }
+.mbtn:hover { filter:brightness(.95); }
+.mbtn.primary { background:var(--header); color:#fff; border-color:var(--header); }
+.mbtn.danger { background:var(--red); color:#fff; border-color:var(--red); }
+
+/* Printer config */
+.printer-option { display:flex; align-items:center; gap:12px; padding:10px 12px; border-radius:10px; border:1.5px solid var(--border); margin-bottom:6px; cursor:pointer; }
+.printer-option.selected { border-color:var(--header); background:#f8f7f6; }
+.printer-option-info { flex:1; }
+.printer-option-name { font-size:13px; font-weight:500; }
+.printer-option-sub  { font-size:11px; color:var(--text2); margin-top:1px; }
+
+.select-box { width: 100%; padding: 10px 12px; border: 1.5px solid var(--border); border-radius: 8px; font-family: inherit; font-size: 13px; color: var(--text); outline: none; background: var(--surface); transition: border-color .15s; cursor: pointer; }
+.select-box:focus { border-color: var(--header); }
+
+.test-result { margin-top:10px; padding:8px 12px; border-radius:8px; font-size:12px; display:none; }
+.test-result.ok   { background:var(--green-light); color:var(--green); border:1px solid var(--green-mid); display:block;}
+.test-result.fail { background:var(--red-light);   color:var(--red);   border:1px solid var(--red-mid);  display:block;}
+
+/* WA panel specifics */
+.wa-status-box { background:var(--surface2); padding: 16px; border-radius: 12px; text-align: center; margin-bottom: 16px; border: 1px solid var(--border);}
+.wa-status-text { font-size: 16px; font-weight: bold; margin-bottom: 4px; }
+.wa-qr-container { display: flex; justify-content: center; margin-top: 16px; }
+.wa-qr-container img { border: 10px solid white; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width:200px; height:200px; }
+.wa-help { font-size: 12px; color: var(--text2); text-align: center; margin-top: 12px; }
+
+.spin { display:inline-block; width:12px; height:12px; border:2px solid rgba(0,0,0,.3); border-top-color:var(--text); border-radius:50%; animation:spinning .6s linear infinite; }
+@keyframes spinning { to{transform:rotate(360deg)} }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="header">
+  <div class="header-left">
+    <span class="shop-name" id="shopName">Panel de pedidos</span>
+    
+    <button class="hbtn" id="waBtn" onclick="openWaModal()" title="Ver estado de conexión">
+      <span class="status-dot red" id="waDot"></span>
+      <span id="waLabel">Conectando...</span>
+    </button>
+  </div>
+
+  <div class="header-right">
+    <button class="hbtn" id="soundBtn" onclick="toggleSound()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 010 7.07"/><path d="M19.07 4.93a10 10 0 010 14.14"/></svg>
+      Sonido
+    </button>
+    <button class="hbtn" id="printerBtn" onclick="openPrinterModal()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+      <span id="printerLabel">Cargando...</span>
+    </button>
+    <div class="clock" id="clock">--:--</div>
+  </div>
+</header>
+
+<!-- STATS & TABS -->
+<div class="stats">
+  <div class="stat stat-pending"><div class="stat-num" id="cntPending">0</div><div class="stat-label">Pendientes</div></div>
+  <div class="stats-sep"></div>
+  <div class="stat stat-ready" ><div class="stat-num" id="cntReady">0</div>  <div class="stat-label">Listos</div></div>
+  <div class="stats-sep"></div>
+  <div class="stat stat-fail"  ><div class="stat-num" id="cntFail">0</div>   <div class="stat-label">Fallos impresión</div></div>
+  <div class="stats-sep"></div>
+  <div class="stat stat-done"  ><div class="stat-num" id="cntDone">0</div>   <div class="stat-label">Recogidos hoy</div></div>
+  <div class="stats-spc"></div>
+</div>
+
+<div class="tabs">
+  <button class="tab active" id="tab-active" onclick="setTab('active')">En curso</button>
+  <button class="tab"        id="tab-fail"   onclick="setTab('fail')">Fallos <span class="tab-badge" id="failBadge" style="display:none">0</span></button>
+  <button class="tab"        id="tab-all"    onclick="setTab('all')">Todos</button>
+</div>
+
+<div class="grid" id="grid"></div>
+
+<!-- ── MODAL DE WHATSAPP ─────────────────────────────────────────────────── -->
+<div class="overlay hidden" id="waOverlay" onclick="handleWaOverlayClick(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+        Conexión WhatsApp
+      </div>
+      <button class="modal-close" onclick="closeWaModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      
+      <div class="wa-status-box">
+        <div class="wa-status-text" id="waModalStatus">Comprobando...</div>
+        <div style="font-size:12px; color:var(--text2)" id="waModalSub">El servidor se está iniciando</div>
+        
+        <div class="wa-qr-container" id="waQrContainer" style="display:none;">
+          <img id="waQrImg" src="" alt="Escanea el código QR">
+        </div>
+      </div>
+
+      <div class="wa-help" id="waHelpText">
+        Si el bot deja de responder a los clientes, prueba a reiniciar el servicio.
+      </div>
+
+    </div>
+    <div class="modal-footer" style="justify-content: space-between;">
+      <button class="mbtn danger" onclick="resetWaProcess()" title="Borrará la sesión y pedirá escanear de nuevo">Desvincular y Nuevo QR</button>
+      <button class="mbtn primary" onclick="restartWaProcess()">Reiniciar Bot</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL DE IMPRESORA ─────────────────────────────────────────────────── -->
+<div class="overlay hidden" id="printOverlay" onclick="handlePrintOverlayClick(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Seleccionar impresora</div>
+      <button class="modal-close" onclick="closePrinterModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="printerList"><div style="font-size:12px;color:var(--text3);padding:8px 0;">Cargando...</div></div>
+      
+      <div style="margin-top: 20px;">
+        <div style="font-size:11px; font-weight:600; color:var(--text3); margin-bottom:10px; text-transform:uppercase; letter-spacing: 0.5px;">Formato de Papel</div>
+        <select id="profileSelect" class="select-box">
+          <option value="label_square">Etiquetas Cuadradas (Brother TD-4000)</option>
+          <option value="a4_paper">Folio A4 Clásico (Brother HL-1210W)</option>
+        </select>
+      </div>
+
+      <div class="test-result" id="testResult"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="mbtn" id="btnTest" onclick="testPrinter()">Probar</button>
+      <button class="mbtn" onclick="closePrinterModal()">Cancelar</button>
+      <button class="mbtn primary" id="btnSave" onclick="savePrinter()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+const store = new Map();
+let tab = 'active', soundOn = true;
+const confirming = new Set();
+let activePrinter = '', selectedPrinter = ''; 
+let printerProfiles = {};  
+let serverAlive = false;
+
+// ── Clock & Sound ─────────────────────────────────────────────────────────────
+(function tick(){ document.getElementById('clock').textContent = new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}); setTimeout(tick,1000); })();
+function toggleSound(){ soundOn=!soundOn; document.getElementById('soundBtn').style.opacity = soundOn ? '' : '.5'; }
+function beep(){ if(soundOn) try{ const c=new(window.AudioContext||window.webkitAudioContext)(); [[880,0],[1100,160]].forEach(([f,d])=>{ const o=c.createOscillator(),g=c.createGain(); o.connect(g);g.connect(c.destination);o.frequency.value=f; const t=c.currentTime+d/1000; g.gain.setValueAtTime(.25,t);g.gain.exponentialRampToValueAtTime(.001,t+.25); o.start(t);o.stop(t+.3); }); }catch{} }
+function beepError(){ if(soundOn) try{ const c=new(window.AudioContext||window.webkitAudioContext)(); const o=c.createOscillator(),g=c.createGain(); o.connect(g);g.connect(c.destination);o.frequency.value=260; g.gain.setValueAtTime(.3,c.currentTime);g.gain.exponentialRampToValueAtTime(.001,c.currentTime+.7); o.start();o.stop(c.currentTime+.7); }catch{} }
+
+function updatePrinterLabel(iface){
+  activePrinter = iface || ''; 
+  let l = iface || 'Sin impresora';
+  if(l.length > 18) l = l.substring(0,16)+'…';
+  document.getElementById('printerLabel').textContent = l;
+  document.getElementById('printerBtn').className = 'hbtn' + (!iface ? ' warn' : '');
+}
+
+// ── Render WA Status ──────────────────────────────────────────────────────────
+function renderWaStatus(state, qrUrl) {
+  const dot = document.getElementById('waDot');
+  const lbl = document.getElementById('waLabel');
+  const modTxt = document.getElementById('waModalStatus');
+  const modSub = document.getElementById('waModalSub');
+  const qrCont = document.getElementById('waQrContainer');
+  const qrImg  = document.getElementById('waQrImg');
+  const help   = document.getElementById('waHelpText');
+
+  if(!serverAlive) {
+    dot.className = 'status-dot red'; lbl.textContent = 'Servidor Caído';
+    modTxt.textContent = 'Servidor Desconectado'; modSub.textContent = 'Reconectando con el panel interno...';
+    qrCont.style.display = 'none'; return;
+  }
+
+  if (state === 'CONNECTED') {
+    dot.className = 'status-dot green'; lbl.textContent = 'WhatsApp Activo';
+    modTxt.textContent = 'Servicio Activo'; modTxt.style.color = 'var(--green)';
+    modSub.textContent = 'Respondiendo y procesando pedidos automáticamente.';
+    qrCont.style.display = 'none';
+    help.textContent = 'Si deja de responder, puedes probar a reiniciar el proceso inferiormente.';
+  } 
+  else if (state === 'QR') {
+    dot.className = 'status-dot yellow'; lbl.textContent = 'Esperando QR';
+    modTxt.textContent = 'Requiere Vinculación'; modTxt.style.color = 'var(--amber)';
+    modSub.textContent = 'Abre WhatsApp en tu móvil > Dispositivos vinculados > Escanear QR';
+    if(qrUrl) { qrImg.src = qrUrl; qrCont.style.display = 'flex'; }
+    help.textContent = 'Si el QR no carga, pulsa "Reiniciar Bot".';
+  } 
+  else if (state === 'STARTING') {
+    dot.className = 'status-dot yellow'; lbl.textContent = 'Iniciando...';
+    modTxt.textContent = 'Iniciando navegador...'; modTxt.style.color = 'var(--amber)';
+    modSub.textContent = 'Levantando sesión de WhatsApp en segundo plano.';
+    qrCont.style.display = 'none';
+  } 
+  else {
+    dot.className = 'status-dot red'; lbl.textContent = 'Desconectado';
+    modTxt.textContent = 'WhatsApp Desconectado'; modTxt.style.color = 'var(--red)';
+    modSub.textContent = 'Se perdió la conexión con el teléfono o cerraste la sesión.';
+    qrCont.style.display = 'none';
+  }
+}
+
+// ── SSE ───────────────────────────────────────────────────────────────────────
+(function connectSSE(){
+  const es=new EventSource('/events');
+  es.addEventListener('init',e=>{
+    const d=JSON.parse(e.data);
+    if(d.shopName) document.getElementById('shopName').textContent=d.shopName;
+    serverAlive = true;
+    printerProfiles = d.profiles || {};
+    updatePrinterLabel(d.printer);
+    renderWaStatus(d.waState, d.waQrUrl);
+    store.clear(); d.orders.forEach(o=>store.set(o.id,o)); render();
+  });
+  es.addEventListener('new_order',e=>{
+    const o=JSON.parse(e.data); store.set(o.id,o); render(); beep();
+    requestAnimationFrame(()=>{ const el=document.getElementById('c-'+o.id); if(el){el.classList.add('new-flash');el.scrollIntoView({behavior:'smooth',block:'nearest'});} });
+  });
+  es.addEventListener('order_updated',e=>{
+    const o=JSON.parse(e.data); const prev=store.get(o.id);
+    if(o.printError&&(!prev||!prev.printError)) beepError();
+    store.set(o.id,o); render();
+  });
+  es.addEventListener('printer_changed',e=>{ 
+    const d = JSON.parse(e.data);
+    printerProfiles[d.interface] = d.profile;
+    updatePrinterLabel(d.interface); 
+  });
+  
+  es.addEventListener('wa_state',e=>{
+    const d=JSON.parse(e.data);
+    renderWaStatus(d.state, d.qr);
+  });
+
+  es.onerror=()=>{ serverAlive = false; renderWaStatus('ERROR', ''); setTimeout(connectSSE,3000); };
+})();
+
+function setTab(t){ tab=t; document.querySelectorAll('.tab').forEach(el=>el.classList.remove('active')); document.getElementById('tab-'+t).classList.add('active'); render(); }
+
+// ── Render Grid ───────────────────────────────────────────────────────────────
+function render(){
+  const all= [...store.values()].sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  const fails=all.filter(o=>o.printError&&o.status!=='discarded');
+  document.getElementById('cntPending').textContent=all.filter(o=>o.status==='pending').length;
+  document.getElementById('cntReady').textContent=all.filter(o=>o.status==='ready').length;
+  document.getElementById('cntFail').textContent=fails.length;
+  document.getElementById('cntDone').textContent=all.filter(o=>o.status==='done').length;
+  const badge=document.getElementById('failBadge'); badge.style.display=fails.length?'flex':'none'; badge.textContent=fails.length;
+
+  let visible = tab==='active' ? all.filter(o=>!['done','discarded'].includes(o.status)) : (tab==='fail' ? fails : all);
+  const grid=document.getElementById('grid');
+  
+  if(!visible.length){
+    const msgs={active:'Sin pedidos en curso',fail:'Sin fallos de impresión',all:'Sin pedidos hoy'};
+    grid.innerHTML=`<div class="empty"><span class="empty-icon">🥩</span><div style="font-size:15px">${msgs[tab]}</div></div>`;
+    return;
+  }
+  
+  const ids=new Set(visible.map(o=>o.id));
+  [...grid.children].forEach(el=>{if(el.dataset&&el.dataset.id&&!ids.has(el.dataset.id))el.remove();});
+  
+  visible.forEach((o,idx)=>{
+    const ex=document.getElementById('c-'+o.id);
+    const changed=!ex||ex.dataset.status!==o.status||ex.dataset.pe!==String(!!o.printError);
+    if(changed){
+      const div=document.createElement('div'); div.innerHTML=cardHTML(o);
+      const ne=div.firstElementChild;
+      if(ex) grid.replaceChild(ne,ex); else{ const ref=grid.children[idx]; if(ref)grid.insertBefore(ne,ref); else grid.appendChild(ne); }
+    }
+  });
+}
+
+function ft(iso){ return new Date(iso).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}); }
+
+function cardHTML(o){
+  const labels={pending:'PENDIENTE',ready:'LISTO ✓',done:'RECOGIDO',discarded:'DESCARTADO'};
+  const items=(o.articulos||[]).map(a=>`<div class="item"><span class="item-qty">${a.cantidad}</span><span>${a.producto}</span></div>`).join('');
+  const readyCls=o.status!=='pending'?'is-done':''; const inactive=['done','discarded'].includes(o.status); const isConf=confirming.has(o.id);
+  const errBanner=o.printError?`<div class="err-banner"><div class="err-msg"><strong>⚠ Error al imprimir</strong>${o.printError.message}${o.printError.retries>0?' · '+o.printError.retries+' reintento(s)':''}</div><button class="btn-retry" id="retry-${o.id}" onclick="retryPrint('${o.id}')" ${inactive?'disabled':''}>Reintentar</button></div>`:'';
+  
+  const actions=inactive?'':`<div class="card-actions">
+    <button class="btn btn-ready ${readyCls}" onclick="act('${o.id}','ready')" ${readyCls?'disabled':''}>✓ Listo</button>
+    <button class="btn btn-recogido" onclick="act('${o.id}','done')">Recogido</button>
+    <button class="btn btn-print" onclick="reprintOrder('${o.id}', this)" title="Volver a imprimir">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+    </button>
+    <button class="btn btn-discard ${isConf?'conf':''}" id="dis-${o.id}" onclick="handleDiscard('${o.id}')">${isConf?'¿Descartar?':'✕'}</button>
+  </div>`;
+  
+  return `<div class="card status-${o.status} ${o.printError?'has-print-error':''}" id="c-${o.id}" data-id="${o.id}" data-status="${o.status}" data-pe="${!!o.printError}"><div class="card-pin"><div class="pin-code">${o.pin}</div><div class="pin-side"><div class="pin-time">${ft(o.createdAt)}</div><span class="status-pill">${labels[o.status]??o.status}</span></div></div>${errBanner}<div class="card-body"><div class="card-name">${o.cliente||'Cliente'}</div><div style="height:1px; background:var(--border); margin-bottom:10px;"></div><div class="items">${items}</div></div>${actions}</div>`;
+}
+
+// ── Card actions ──────────────────────────────────────────────────────────────
+async function act(id,action){ const o=store.get(id); if(!o || (action==='ready'&&o.status!=='pending') || (action==='done'&&o.status==='done'))return; await fetch('/api/orders/'+id+'/'+action,{method:'POST'}); }
+function handleDiscard(id){ if(confirming.has(id)){ confirming.delete(id); fetch('/api/orders/'+id+'/discard',{method:'POST'}); } else { confirming.add(id); const btn=document.getElementById('dis-'+id); if(btn){btn.classList.add('conf');btn.textContent='¿Descartar?';} setTimeout(()=>{ if(confirming.has(id)){ confirming.delete(id); const b=document.getElementById('dis-'+id); if(b){b.classList.remove('conf');b.textContent='✕';} } },4000); } }
+async function retryPrint(id){ const btn=document.getElementById('retry-'+id); if(btn){btn.disabled=true;btn.textContent='Reintentando...';} const res=await fetch('/api/orders/'+id+'/retry-print',{method:'POST'}); if(!res.ok&&btn){btn.disabled=false;btn.textContent='Reintentar';} }
+
+async function reprintOrder(id, btn){ 
+  const prev=btn.innerHTML; 
+  btn.disabled=true; 
+  btn.innerHTML='<span class="spin" style="margin:0"></span>'; 
+  await fetch('/api/orders/'+id+'/retry-print',{method:'POST'}); 
+  btn.disabled=false; 
+  btn.innerHTML=prev; 
+}
+
+// ── WA Modal ──────────────────────────────────────────────────────────────────
+function openWaModal() { document.getElementById('waOverlay').classList.remove('hidden'); }
+function closeWaModal() { document.getElementById('waOverlay').classList.add('hidden'); }
+function handleWaOverlayClick(e){ if(e.target===document.getElementById('waOverlay')) closeWaModal(); }
+
+async function restartWaProcess() {
+  if(!confirm("Esto reiniciará el bot en segundo plano. Los mensajes pendientes se procesarán al arrancar. ¿Continuar?")) return;
+  await fetch('/api/whatsapp/restart', { method: 'POST' });
+  closeWaModal();
+}
+
+async function resetWaProcess() {
+  if(!confirm("⚠ ATENCIÓN: Esto borrará la sesión actual. Tendrás que volver a escanear el código QR con el móvil de la tienda. ¿Estás seguro?")) return;
+  await fetch('/api/whatsapp/reset', { method: 'POST' });
+  closeWaModal();
+}
+
+// ── Printer Modal ─────────────────────────────────────────────────────────────
+async function openPrinterModal(){
+  document.getElementById('printOverlay').classList.remove('hidden');
+  document.getElementById('testResult').style.display='none';
+  selectedPrinter = activePrinter;
+  
+  document.getElementById('printerList').innerHTML = '<div style="font-size:12px;color:var(--text3);padding:8px 0;">Consultando impresoras de Windows...</div>';
+  
+  try { 
+    const res = await fetch('/api/printers'); 
+    const data = await res.json(); 
+    
+    printerProfiles = data.profiles || {};
+    updatePrinterLabel(data.current);
+    selectedPrinter = data.current;
+    
+    document.getElementById('profileSelect').value = printerProfiles[data.current] || 'label_square';
+    renderPrinterOptions(data.printers, data.current); 
+  } 
+  catch { document.getElementById('printerList').innerHTML = '<div style="font-size:12px;color:var(--red);padding:8px 0;">Error al obtener impresoras</div>'; }
+}
+
+function closePrinterModal(){ document.getElementById('printOverlay').classList.add('hidden'); }
+function handlePrintOverlayClick(e){ if(e.target===document.getElementById('printOverlay')) closePrinterModal(); }
+
+function renderPrinterOptions(printers, current){
+  const list = document.getElementById('printerList');
+  if(!printers.length) return list.innerHTML='<div style="font-size:12px;color:var(--text3);padding:4px 0;">No se detectaron impresoras instaladas.</div>';
+  list.innerHTML = printers.map(name=>{
+    const isActive = current === name;
+    return `<div class="printer-option ${isActive?'active-printer selected':''}" onclick="selectWindowsPrinter('${name.replace(/'/g, "\\'")}',this)"><input type="radio" name="printer" value="${name.replace(/'/g, "\\'")}" ${isActive?'checked':''} onclick="selectWindowsPrinter('${name.replace(/'/g, "\\'")}',this.closest('.printer-option'))"><div class="printer-option-info"><div class="printer-option-name">${name}</div><div class="printer-option-sub">${isActive?'Impresora activa en el local':'Impresora de Windows'}</div></div></div>`;
+  }).join('');
+}
+
+function selectWindowsPrinter(val, el){ 
+  selectedPrinter = val; 
+  document.querySelectorAll('.printer-option').forEach(o=>o.classList.remove('selected')); 
+  el.classList.add('selected'); 
+  el.querySelector('input[type=radio]').checked=true; 
+  document.getElementById('testResult').style.display='none'; 
+
+  if (printerProfiles[val]) {
+    document.getElementById('profileSelect').value = printerProfiles[val];
+  } else {
+    document.getElementById('profileSelect').value = 'label_square';
+  }
+}
+
+async function testPrinter(){
+  if(!selectedPrinter) return; 
+  const btn = document.getElementById('btnTest'); 
+  const prof = document.getElementById('profileSelect').value;
+  
+  btn.disabled=true; btn.textContent='Probando...';
+  try{ 
+    const res = await fetch('/api/printer/test', {
+      method: 'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ interface: selectedPrinter, profile: prof })
+    }); 
+    const data = await res.json(); 
+    const el = document.getElementById('testResult'); 
+    el.className='test-result '+(data.ok?'ok':'fail'); 
+    el.textContent=(data.ok?'✓ Spooler OK':'✕ '+(data.error||'Fallo')); 
+  } catch {} finally { btn.disabled=false; btn.textContent='Probar'; }
+}
+
+async function savePrinter(){
+  if(!selectedPrinter) return; 
+  const btn=document.getElementById('btnSave'); 
+  const prof = document.getElementById('profileSelect').value;
+
+  btn.disabled=true; btn.textContent='Guardando...';
+  try{ 
+    const res = await fetch('/api/printer', {
+      method: 'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ interface: selectedPrinter, profile: prof })
+    }); 
+    const data = await res.json(); 
+    if(data.ok){ 
+      printerProfiles[selectedPrinter] = prof;
+      updatePrinterLabel(selectedPrinter); 
+      closePrinterModal(); 
+    } 
+  } catch {} finally { btn.disabled=false; btn.textContent='Guardar'; }
+}
+</script>
+</body>
+</html>
