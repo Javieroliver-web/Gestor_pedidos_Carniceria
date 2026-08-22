@@ -1,8 +1,8 @@
-# Sistema de Pedidos WhatsApp — Carnicería Bot 🥩
+# Sistema de Pedidos WhatsApp — Carnicería Bot
 
 Un sistema completo de punto de venta (POS) y recepción de pedidos automatizado vía WhatsApp. Diseñado originalmente para la Carnicería Raúl Oliver, el bot recibe los mensajes, utiliza Inteligencia Artificial (Groq - Llama 3) para extraer los productos y cantidades, y los envía automáticamente a la cola de impresión del local, reflejándolos en un panel de control web en tiempo real.
 
-## 🚀 Características principales
+## Características principales
 - **Extracción por IA:** Entiende lenguaje natural y extrae el JSON del pedido automáticamente.
 - **Panel Web en Tiempo Real:** Interfaz frontend (Dashboard) sincronizada mediante Server-Sent Events (SSE).
 - **Gestión Avanzada de Hardware:** Motor de impresión dual con patrón estrategia. Imprime a bajo nivel en .NET para etiquetas cuadradas térmicas (Ej: Brother TD-4000) o mediante `notepad /pt` para tickets en A4 (Ej: Brother HL-1210W).
@@ -10,7 +10,7 @@ Un sistema completo de punto de venta (POS) y recepción de pedidos automatizado
 
 ---
 
-## 📁 Estructura del proyecto
+## Estructura del proyecto
 
 ```text
 Gestor_pedidos_Carniceria/
@@ -30,7 +30,7 @@ Gestor_pedidos_Carniceria/
 
 ---
 
-## 🛠️ Instalación y despliegue
+## Instalación y despliegue
 
 ### 1. Requisitos previos
 - [Node.js](https://nodejs.org/) (Versión LTS recomendada)
@@ -77,7 +77,7 @@ pm2 save
 
 ---
 
-## 💻 Uso del Panel de Control (Dashboard)
+## Uso del Panel de Control (Dashboard)
 Abre tu navegador en: **http://localhost:3000**
 
 Desde esta interfaz de administrador puedes:
@@ -89,7 +89,7 @@ Desde esta interfaz de administrador puedes:
 
 ---
 
-## 🔄 Flujo del Sistema
+## Flujo del Sistema
 ```text
 Cliente (WhatsApp) 
   ↳ Filtro Regex local (ignora mensajes no comerciales)
@@ -102,7 +102,7 @@ Cliente (WhatsApp)
 
 ---
 
-## ⚙️ Mantenimiento y Comandos Útiles
+## Mantenimiento y Comandos Útiles
 Si necesitas gestionar el servicio en segundo plano, abre PowerShell:
 ```powershell
 pm2 status                  # Ver estado general del bot
@@ -112,6 +112,6 @@ pm2 restart carniceria-bot  # Reiniciar el sistema
 
 ---
 
-## 👨‍💻 Autor
+## Autor
 Desarrollado por **Francisco Javier Párraga Oliver**  
 *Backend Software Developer*
