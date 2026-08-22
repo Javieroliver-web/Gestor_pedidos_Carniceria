@@ -49,15 +49,11 @@ npm install
 ```
 
 ### 4. Configurar variables de entorno
-Renombra el archivo de ejemplo para crear tu configuración local:
-```powershell
-cp .env.example .env
-```
-Edita el `.env` con tus datos. Necesitarás una API Key gratuita de [Groq Console](https://console.groq.com):
+Crea un archivo llamado `.env` en la raíz del proyecto (puedes usar el contenido de `.env.example` como plantilla) y añade tus datos. Necesitarás una API Key gratuita de [Groq Console](https://console.groq.com):
 ```env
-GROQ_API_KEY=gsk_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-PRINTER_INTERFACE=Brother TD-4000
-SHOP_NAME="CARNICERÍA RAÚL OLIVER"
+API_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+PRINTER_INTERFACE=Brother XXXXXXX
+SHOP_NAME="NAME"
 PORT=3000
 ```
 
