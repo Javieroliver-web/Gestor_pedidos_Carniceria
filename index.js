@@ -72,7 +72,7 @@ function listWindowsPrinters() {
   });
 }
 
-const ORDER_RE = /\b(kilo|kg|gramo|gr|pechuga|pollo|ternera|cerdo|chorizo|morcilla|chuleta|filete|costill|jamón|jamon|lomo|buey|cordero|conejo|pavo|loncha|trozo|picad|entero|medio|cuarto|unidad|pieza|chuletón|secreto|solomillo|magro)\b/i;
+const ORDER_RE = /\b(kilo|kg|gramo|gr|pechuga|pollo|ternera|cerdo|chorizo|morcilla|chuleta|filete|costill|jam[oó]n|lomo|buey|cordero|conejo|pavo|loncha|trozo|picad|entero|medio|cuarto|unidad|pieza|chulet[oó]n|secreto|solomillo|magro|alb[oó]ndiga|alita|bartolito|berenjena|bomba|brocheta|burrito|cachopo|carrillada|chistorra|churrasco|churrasquito|contramuslo|cordon|flamenqu[ií]n|hamburguesa|jamoncito|lagrimita|lolito|magdalena|pastel|pimiento|pincho|rotin|salchicha|san\s*jacobo|s[aá]ndwich|taquito)\b/i;
 
 const processedMsgIds = new Set();
 
@@ -141,7 +141,6 @@ async function printTicket(order, pin) {
   const printerName = getPrinterName(currentPrinter);
   if (!printerName) throw new Error('No hay ninguna impresora configurada.');
 
-  // Obtener el perfil guardado para esta impresora específica (por defecto cuadrada)
   const profile = printerProfiles[printerName] || 'label_square';
 
   if (profile === 'a4_paper') {
@@ -167,6 +166,13 @@ async function printSquareLabel(order, pin, printerName) {
 
   if (order.cliente && order.cliente.toLowerCase() !== 'cliente') {
     ticketText += ` Cliente: ${order.cliente}\n`;
+  }
+  
+  if (order.hora && String(order.hora).toLowerCase() !== 'null') {
+    ticketText += ` HORA RECOGIDA: ${order.hora}\n`;
+  }
+
+  if ((order.cliente && order.cliente.toLowerCase() !== 'cliente') || (order.hora && String(order.hora).toLowerCase() !== 'null')) {
     ticketText += `${separator}\n`;
   }
 
@@ -183,7 +189,6 @@ async function printSquareLabel(order, pin, printerName) {
   try {
     fs.writeFileSync(tempFilePath, ticketText, 'utf8');
 
-    // Script robusto de .NET forzando el papel a 76x76mm por código
     const psScript = `
       $printerName = '${printerName}';
       $filePath = '${tempFilePath.replace(/\\/g, '\\\\')}';
@@ -197,12 +202,10 @@ async function printSquareLabel(order, pin, printerName) {
           throw "La impresora '$printerName' no es válida.";
       }
       
-      # FORZAR TAMAÑO 76x76 mm (76mm = 2.99 pulgadas -> 100 centésimas de pulgada = 299)
       $pageSettings = New-Object System.Drawing.Printing.PageSettings;
       $customSize = New-Object System.Drawing.Printing.PaperSize('Custom-76x76', 299, 299);
       $pageSettings.PaperSize = $customSize;
       
-      # Márgenes a 0 para aprovechar toda la pegatina
       $pageSettings.Margins = New-Object System.Drawing.Printing.Margins(10, 10, 10, 10);
       $printDocument.DefaultPageSettings = $pageSettings;
       
@@ -241,10 +244,14 @@ async function printA4(order, pin, printerName) {
   ticketText += `   ${separator}\n\n`;
   ticketText += `   >> CÓDIGO DE RECOGIDA (PIN): ${pin} <<\n\n`;
   ticketText += `   ${separator}\n`;
-  ticketText += `   Fecha: ${fecha}       Hora: ${hora}\n`;
+  ticketText += `   Fecha: ${fecha}      Hora: ${hora}\n`;
 
   if (order.cliente && order.cliente.toLowerCase() !== 'cliente') {
     ticketText += `   Cliente: ${order.cliente}\n`;
+  }
+  
+  if (order.hora && String(order.hora).toLowerCase() !== 'null') {
+    ticketText += `   HORA RECOGIDA: ${order.hora}\n`;
   }
   
   ticketText += `   ${subSeparator}\n\n`;
@@ -421,7 +428,7 @@ const groq = new Groq({ apiKey: GROQ_API_KEY });
 
 async function extractOrder(text) {
   const response = await groq.chat.completions.create({
-    model:       'llama3-8b-8192',
+    model:       'openai/gpt-oss-120b',
     temperature: 0.1,
     max_tokens:  400,
     messages: [{
@@ -429,7 +436,7 @@ async function extractOrder(text) {
       content:
         'Eres el sistema de una carnicería española. Extrae los datos del pedido del siguiente mensaje de WhatsApp.\n' +
         'Devuelve ÚNICAMENTE un objeto JSON válido, sin markdown ni texto extra, con este formato exacto:\n' +
-        '{"cliente":"nombre o Cliente si no lo dice","articulos":[{"cantidad":"X kg/g/uds","producto":"nombre del producto"}]}\n' +
+        '{"cliente":"nombre o Cliente si no lo dice","hora":"hora especificada o null","articulos":[{"cantidad":"X kg/g/uds","producto":"nombre del producto"}]}\n' +
         `Mensaje: ${text}`,
     }],
   });
@@ -441,7 +448,7 @@ async function extractOrder(text) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  WHATSAPP
+//  WHATSAPP Y BUFFER DE MENSAJES (SALA DE ESPERA)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BROWSER_PATHS = [
@@ -469,7 +476,7 @@ const client = new Client({
 
 client.on('qr', qr => {
   waState = 'QR';
-  waQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(qr)}`;
+  waQrUrl = `[https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=$](https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=$){encodeURIComponent(qr)}`;
   broadcastWaState();
   
   console.log('\n══════════════════════════════════════════════');
@@ -505,13 +512,47 @@ client.on('disconnected', why => {
   process.exit(1); 
 });
 
+// Mapa temporal para agrupar mensajes de una misma persona
+const userBuffers = new Map();
+
 client.on('message', async msg => {
   if (msg.fromMe || msg.from.includes('@g.us') || msg.from.includes('@broadcast') || !msg.body?.trim()) return;
   if (processedMsgIds.has(msg.id._serialized)) return;
+  
   processedMsgIds.add(msg.id._serialized);
+  // Limpieza de memoria automática para que el Set no crezca al infinito
+  if (processedMsgIds.size > 1000) processedMsgIds.clear();
 
-  const text   = msg.body.trim();
-  const sender = msg.from.split('@')[0];
+  const senderId = msg.from;
+  const text     = msg.body.trim();
+
+  // Si el usuario no tiene una "sala de espera" creada, se la creamos
+  if (!userBuffers.has(senderId)) {
+    userBuffers.set(senderId, { texts: [], msgs: [], timer: null });
+  }
+
+  const buffer = userBuffers.get(senderId);
+  buffer.texts.push(text);
+  buffer.msgs.push(msg); // Guardamos el mensaje original para poder responderle luego
+
+  // Si ya había una cuenta atrás, la paramos
+  if (buffer.timer) clearTimeout(buffer.timer);
+
+  // Iniciamos una nueva cuenta atrás de 5 segundos (5000 milisegundos)
+  buffer.timer = setTimeout(async () => {
+    // Si pasan 5 segundos sin que escriba nada más, unimos todo
+    const combinedText = buffer.texts.join('. ');
+    const lastMsg = buffer.msgs[buffer.msgs.length - 1]; // Para responder citando su último mensaje
+    
+    userBuffers.delete(senderId); // Limpiamos la sala de espera
+    
+    await processOrder(senderId, combinedText, lastMsg);
+  }, 5000);
+});
+
+// Función que manda todo a la IA de golpe
+async function processOrder(senderId, text, msg) {
+  const sender = senderId.split('@')[0];
   log('MSG', `${sender}: "${text.substring(0, 60)}${text.length > 60 ? '…' : ''}"`);
 
   if (!ORDER_RE.test(text)) return;
@@ -537,6 +578,7 @@ client.on('message', async msg => {
   const record = {
     id, pin,
     cliente:    order.cliente  ?? 'Cliente',
+    hora:       order.hora     ?? null,
     articulos:  order.articulos,
     createdAt:  new Date().toISOString(),
     status:     'pending',
@@ -560,7 +602,7 @@ client.on('message', async msg => {
     const lista = order.articulos.map(a => `• ${a.cantidad} ${a.producto}`).join('\n');
     await msg.reply(`✅ ¡Pedido recibido!\n\n${lista}\n\nCódigo de recogida: *${pin}*\nIndícalo al llegar al mostrador.`);
   } catch (e) { log('ERROR', `Reply WhatsApp: ${e.message}`); }
-});
+}
 
 process.on('SIGINT', async () => {
   log('SYS', 'Cerrando servicio...');
