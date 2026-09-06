@@ -393,11 +393,15 @@ function render(){
 
 function ft(iso){ return new Date(iso).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}); }
 
+// El nombre de cliente y los productos salen de un WhatsApp de cualquiera y pasan
+// por la IA, así que nunca se insertan crudos en el DOM.
+function esc(v){ return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
 function cardHTML(o){
   const labels={pending:'PENDIENTE',ready:'LISTO ✓',done:'RECOGIDO',discarded:'DESCARTADO'};
-  const items=(o.articulos||[]).map(a=>`<div class="item"><span class="item-qty">${a.cantidad}</span><span>${a.producto}</span></div>`).join('');
+  const items=(o.articulos||[]).map(a=>`<div class="item"><span class="item-qty">${esc(a.cantidad)}</span><span>${esc(a.producto)}</span></div>`).join('');
   const readyCls=o.status!=='pending'?'is-done':''; const inactive=['done','discarded'].includes(o.status); const isConf=confirming.has(o.id);
-  const errBanner=o.printError?`<div class="err-banner"><div class="err-msg"><strong>⚠ Error al imprimir</strong>${o.printError.message}${o.printError.retries>0?' · '+o.printError.retries+' reintento(s)':''}</div><button class="btn-retry" id="retry-${o.id}" onclick="retryPrint('${o.id}')" ${inactive?'disabled':''}>Reintentar</button></div>`:'';
+  const errBanner=o.printError?`<div class="err-banner"><div class="err-msg"><strong>⚠ Error al imprimir</strong>${esc(o.printError.message)}${o.printError.retries>0?' · '+esc(o.printError.retries)+' reintento(s)':''}</div><button class="btn-retry" id="retry-${esc(o.id)}" onclick="retryPrint('${esc(o.id)}')" ${inactive?'disabled':''}>Reintentar</button></div>`:'';
   
   const actions=inactive?'':`<div class="card-actions">
     <button class="btn btn-ready ${readyCls}" onclick="act('${o.id}','ready')" ${readyCls?'disabled':''}>✓ Listo</button>
@@ -408,7 +412,7 @@ function cardHTML(o){
     <button class="btn btn-discard ${isConf?'conf':''}" id="dis-${o.id}" onclick="handleDiscard('${o.id}')">${isConf?'¿Descartar?':'✕'}</button>
   </div>`;
   
-  return `<div class="card status-${o.status} ${o.printError?'has-print-error':''}" id="c-${o.id}" data-id="${o.id}" data-status="${o.status}" data-pe="${!!o.printError}"><div class="card-pin"><div class="pin-code">${o.pin}</div><div class="pin-side"><div class="pin-time">${ft(o.createdAt)}</div><span class="status-pill">${labels[o.status]??o.status}</span></div></div>${errBanner}<div class="card-body"><div class="card-name">${o.cliente||'Cliente'}</div><div style="height:1px; background:var(--border); margin-bottom:10px;"></div><div class="items">${items}</div></div>${actions}</div>`;
+  return `<div class="card status-${esc(o.status)} ${o.printError?'has-print-error':''}" id="c-${esc(o.id)}" data-id="${esc(o.id)}" data-status="${esc(o.status)}" data-pe="${!!o.printError}"><div class="card-pin"><div class="pin-code">${esc(o.pin)}</div><div class="pin-side"><div class="pin-time">${ft(o.createdAt)}</div><span class="status-pill">${esc(labels[o.status]??o.status)}</span></div></div>${errBanner}<div class="card-body"><div class="card-name">${esc(o.cliente||'Cliente')}</div><div style="height:1px; background:var(--border); margin-bottom:10px;"></div><div class="items">${items}</div></div>${actions}</div>`;
 }
 
 // ── Card actions ──────────────────────────────────────────────────────────────
@@ -472,7 +476,9 @@ function renderPrinterOptions(printers, current){
   if(!printers.length) return list.innerHTML='<div style="font-size:12px;color:var(--text3);padding:4px 0;">No se detectaron impresoras instaladas.</div>';
   list.innerHTML = printers.map(name=>{
     const isActive = current === name;
-    return `<div class="printer-option ${isActive?'active-printer selected':''}" onclick="selectWindowsPrinter('${name.replace(/'/g, "\\'")}',this)"><input type="radio" name="printer" value="${name.replace(/'/g, "\\'")}" ${isActive?'checked':''} onclick="selectWindowsPrinter('${name.replace(/'/g, "\\'")}',this.closest('.printer-option'))"><div class="printer-option-info"><div class="printer-option-name">${name}</div><div class="printer-option-sub">${isActive?'Impresora activa en el local':'Impresora de Windows'}</div></div></div>`;
+    // JSON.stringify + esc: el nombre queda como literal JS válido dentro de un atributo HTML.
+    const arg = esc(JSON.stringify(name));
+    return `<div class="printer-option ${isActive?'active-printer selected':''}" onclick="selectWindowsPrinter(${arg},this)"><input type="radio" name="printer" value="${esc(name)}" ${isActive?'checked':''} onclick="selectWindowsPrinter(${arg},this.closest('.printer-option'))"><div class="printer-option-info"><div class="printer-option-name">${esc(name)}</div><div class="printer-option-sub">${isActive?'Impresora activa en el local':'Impresora de Windows'}</div></div></div>`;
   }).join('');
 }
 

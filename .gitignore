@@ -4,7 +4,6 @@ node_modules/
 # ── Secretos y Variables de Entorno ─────────────────────────────────────
 # ¡NUNCA SUBIR EL .env! Contiene tu GROQ_API_KEY
 .env
-.env.example
 
 # ── Sesión de WhatsApp (Privacidad) ─────────────────────────────────────
 # Contiene los tokens de acceso de tu número de teléfono

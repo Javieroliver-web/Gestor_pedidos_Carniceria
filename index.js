@@ -7,10 +7,12 @@ const Groq                        = require('groq-sdk');
 const express                     = require('express');
 const path                        = require('path');
 const fs                          = require('fs');
-const { exec }                    = require('child_process');
+const { exec, execFile }          = require('child_process');
+const os                          = require('os');
 const util                        = require('util');
 
-const execPromise = util.promisify(exec);
+const execPromise     = util.promisify(exec);
+const execFilePromise = util.promisify(execFile);
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Configuración
@@ -21,7 +23,16 @@ const {
   PRINTER_INTERFACE = 'Brother TD-4000',
   SHOP_NAME         = 'CARNICERÍA RAÚL OLIVER',
   PORT              = '3000',
+  // 0.0.0.0 expone el panel a toda la red local y NO hay autenticación.
+  // Si solo se usa desde este mismo PC, poner HOST=127.0.0.1 en el .env.
+  HOST              = '0.0.0.0',
 } = process.env;
+
+const SERVER_PORT = Number(PORT);
+if (!Number.isInteger(SERVER_PORT) || SERVER_PORT < 1 || SERVER_PORT > 65535) {
+  console.error(`[ERROR] PORT inválido en .env: "${PORT}"`);
+  process.exit(1);
+}
 
 if (!GROQ_API_KEY) {
   console.error('[ERROR] Falta GROQ_API_KEY en .env');
@@ -34,17 +45,44 @@ function log(tag, msg) {
   console.log(`[${ts}] [${tag.padEnd(5)}] ${msg}`);
 }
 
+function centrar(txt, ancho) {
+  const t = String(txt).slice(0, ancho);
+  return ' '.repeat(Math.max(0, Math.floor((ancho - t.length) / 2))) + t;
+}
+
+// Escritura atómica: se vuelca a un temporal y se renombra, así un corte de luz
+// a mitad de la escritura no puede dejar el JSON truncado.
+function writeJsonAtomic(file, data) {
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
+  fs.renameSync(tmp, file);
+}
+
+// Un archivo ilegible se aparta en vez de dejar que la siguiente escritura lo pise.
+function quarantineFile(file) {
+  try {
+    if (fs.existsSync(file)) {
+      const bak = `${file}.corrupto-${Date.now()}.bak`;
+      fs.renameSync(file, bak);
+      log('WARN', `Copia del archivo dañado guardada en ${path.basename(bak)}`);
+    }
+  } catch {}
+}
+
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 
 function loadConfig() {
   try {
     if (fs.existsSync(CONFIG_FILE)) return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-  } catch (e) { log('WARN', `config.json: ${e.message}`); }
+  } catch (e) {
+    log('WARN', `config.json ilegible: ${e.message}`);
+    quarantineFile(CONFIG_FILE);
+  }
   return {};
 }
 
 function saveConfig(cfg) {
-  try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2)); }
+  try { writeJsonAtomic(CONFIG_FILE, cfg); }
   catch (e) { log('ERROR', `No se pudo guardar config.json: ${e.message}`); }
 }
 
@@ -77,9 +115,31 @@ const ORDER_RE = /\b(kilo|kg|gramo|gr|pechuga|pollo|ternera|cerdo|chorizo|morcil
 const processedMsgIds = new Set();
 
 // PIN 100% NUMÉRICO
-function genPin() {
+function randomPin() {
   const chars = '0123456789';
   return [...Array(4)].map(() => chars[Math.floor(Math.random() * chars.length)]).join('');
+}
+
+// Dos pedidos abiertos con el mismo PIN son indistinguibles en mostrador, así que
+// no se reutiliza ninguno que siga en circulación.
+function genPin() {
+  const enUso = new Set(
+    [...orders.values()]
+      .filter(o => !['done', 'discarded'].includes(o.status))
+      .map(o => o.pin)
+  );
+  for (let i = 0; i < 50; i++) {
+    const pin = randomPin();
+    if (!enUso.has(pin)) return pin;
+  }
+  // Espacio casi lleno: barrido determinista desde un punto al azar, para no
+  // depender de la suerte cuando quedan pocos PIN libres.
+  const inicio = Math.floor(Math.random() * 10000);
+  for (let i = 0; i < 10000; i++) {
+    const pin = String((inicio + i) % 10000).padStart(4, '0');
+    if (!enUso.has(pin)) return pin;
+  }
+  return randomPin(); // 10000 pedidos abiertos a la vez: imposible en la práctica
 }
 
 const ORDERS_FILE = path.join(__dirname, 'orders.json');
@@ -90,14 +150,17 @@ function loadOrders() {
       const arr = JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf8'));
       return new Map(arr.map(o => [o.id, o]));
     }
-  } catch (e) { log('WARN', `orders.json: ${e.message}`); }
+  } catch (e) {
+    log('WARN', `orders.json ilegible: ${e.message}`);
+    quarantineFile(ORDERS_FILE);
+  }
   return new Map();
 }
 
 const orders = loadOrders();
 
 function saveOrders() {
-  try { fs.writeFileSync(ORDERS_FILE, JSON.stringify([...orders.values()], null, 2)); }
+  try { writeJsonAtomic(ORDERS_FILE, [...orders.values()]); }
   catch (e) { log('ERROR', `No se pudo guardar orders.json: ${e.message}`); }
 }
 
@@ -131,17 +194,25 @@ function broadcastWaState() {
 
 const sseClients = new Set();
 function sseWrite(res, event, data) { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
-function broadcast(event, data) { for (const res of sseClients) sseWrite(res, event, data); }
+// Un cliente con el socket ya cerrado no debe cortar el envío al resto.
+function broadcast(event, data) {
+  for (const res of sseClients) {
+    try { sseWrite(res, event, data); }
+    catch { sseClients.delete(res); }
+  }
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  ENRUTADOR DE IMPRESIÓN (STRATEGY PATTERN)
 // ═════════════════════════════════════════════════════════════════════════════
 
-async function printTicket(order, pin) {
-  const printerName = getPrinterName(currentPrinter);
+// El destino se resuelve una vez y viaja explícito hacia abajo: así un pedido que
+// entre durante un test de impresora no puede acabar en la impresora de prueba.
+async function printTicket(order, pin, iface = currentPrinter, profileOverride = null) {
+  const printerName = getPrinterName(iface);
   if (!printerName) throw new Error('No hay ninguna impresora configurada.');
 
-  const profile = printerProfiles[printerName] || 'label_square';
+  const profile = profileOverride || printerProfiles[printerName] || 'label_square';
 
   if (profile === 'a4_paper') {
     await printA4(order, pin, printerName);
@@ -152,77 +223,80 @@ async function printTicket(order, pin) {
 
 // ── PERFIL 1: ETIQUETA CUADRADA 76x76mm (.NET Nativo con Papel Forzado a 76x76) ─────────
 async function printSquareLabel(order, pin, printerName) {
-  const now       = new Date();
+  // La fecha sale del pedido, no del reloj: una reimpresión conserva la hora original.
+  const now       = order.createdAt ? new Date(order.createdAt) : new Date();
   const fecha     = now.toLocaleDateString('es-ES');
   const hora      = now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-  
+
   const separator = ' - - - - - - - - - - - - - - - - ';
 
-  let ticketText = `   CARNICERIA RAUL OLIVER\n`;
+  const cliente    = order.cliente == null ? '' : String(order.cliente);
+  const horaRec    = order.hora    == null ? '' : String(order.hora);
+  const hayCliente = cliente && cliente.toLowerCase() !== 'cliente';
+  const hayHora    = horaRec && horaRec.toLowerCase() !== 'null';
+
+  let ticketText = `${centrar(SHOP_NAME, 30)}\n`;
   ticketText += `${separator}\n`;
   ticketText += `      PIN DE PEDIDO: ${pin}\n`;
   ticketText += `   Fecha: ${fecha}  ${hora}\n`;
   ticketText += `${separator}\n`;
 
-  if (order.cliente && order.cliente.toLowerCase() !== 'cliente') {
-    ticketText += ` Cliente: ${order.cliente}\n`;
-  }
-  
-  if (order.hora && String(order.hora).toLowerCase() !== 'null') {
-    ticketText += ` HORA RECOGIDA: ${order.hora}\n`;
-  }
-
-  if ((order.cliente && order.cliente.toLowerCase() !== 'cliente') || (order.hora && String(order.hora).toLowerCase() !== 'null')) {
-    ticketText += `${separator}\n`;
-  }
+  if (hayCliente) ticketText += ` Cliente: ${cliente}\n`;
+  if (hayHora)    ticketText += ` HORA RECOGIDA: ${horaRec}\n`;
+  if (hayCliente || hayHora) ticketText += `${separator}\n`;
 
   for (const item of order.articulos) {
-    const cant = (item.cantidad || '').padEnd(10, ' ');
-    ticketText += ` * ${cant} ${item.producto}\n`;
+    const cant = String(item?.cantidad ?? '').padEnd(10, ' ');
+    ticketText += ` * ${cant} ${String(item?.producto ?? '')}\n`;
   }
 
   ticketText += `${separator}\n`;
   ticketText += `   Indica tu PIN en mostrador.`;
 
-  const tempFilePath = path.join(__dirname, `ticket_${pin}_${Date.now()}.txt`);
+  const tempFilePath = path.join(os.tmpdir(), `ticket_${pin}_${Date.now()}.txt`);
 
   try {
     fs.writeFileSync(tempFilePath, ticketText, 'utf8');
 
+    // El nombre de impresora y la ruta llegan por variables de entorno en vez de
+    // interpolarse en el script: un nombre con comillas ya no puede inyectar PowerShell.
     const psScript = `
-      $printerName = '${printerName}';
-      $filePath = '${tempFilePath.replace(/\\/g, '\\\\')}';
+      $printerName = $env:CARN_PRINTER;
+      $filePath = $env:CARN_TICKET_FILE;
       $content = Get-Content -Path $filePath -Raw -Encoding UTF8;
-      
+
       Add-Type -AssemblyName System.Drawing;
       $printDocument = New-Object System.Drawing.Printing.PrintDocument;
       $printDocument.PrinterSettings.PrinterName = $printerName;
-      
+
       if (-not $printDocument.PrinterSettings.IsValid) {
           throw "La impresora '$printerName' no es válida.";
       }
-      
+
       $pageSettings = New-Object System.Drawing.Printing.PageSettings;
       $customSize = New-Object System.Drawing.Printing.PaperSize('Custom-76x76', 299, 299);
       $pageSettings.PaperSize = $customSize;
-      
+
       $pageSettings.Margins = New-Object System.Drawing.Printing.Margins(10, 10, 10, 10);
       $printDocument.DefaultPageSettings = $pageSettings;
-      
+
       $printDocument.add_PrintPage({
           param($sender, $e)
           $font = New-Object System.Drawing.Font('Consolas', 10);
           $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Black);
           $e.Graphics.DrawString($content, $font, $brush, 0, 0);
       }.GetNewClosure());
-      
+
       $printDocument.Print();
     `;
 
     const encodedCommand = Buffer.from(psScript, 'utf16le').toString('base64');
     const command = `powershell -NoProfile -EncodedCommand ${encodedCommand}`;
 
-    await execPromise(command, { timeout: 15000 });
+    await execPromise(command, {
+      timeout: 15000,
+      env: { ...process.env, CARN_PRINTER: printerName, CARN_TICKET_FILE: tempFilePath },
+    });
     log('PRINT', `Etiqueta 76x76 .NET ${pin} enviada a: ${printerName}`);
   } finally {
     try { if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath); } catch {}
@@ -231,12 +305,18 @@ async function printSquareLabel(order, pin, printerName) {
 
 // ── PERFIL 2: FOLIO A4 ────────────────────────────────────
 async function printA4(order, pin, printerName) {
-  const now       = new Date();
+  // La fecha sale del pedido, no del reloj: una reimpresión conserva la hora original.
+  const now       = order.createdAt ? new Date(order.createdAt) : new Date();
   const fecha     = now.toLocaleDateString('es-ES');
   const hora      = now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-  
+
   const separator = '='.repeat(60);
   const subSeparator = '-'.repeat(60);
+
+  const cliente    = order.cliente == null ? '' : String(order.cliente);
+  const horaRec    = order.hora    == null ? '' : String(order.hora);
+  const hayCliente = cliente && cliente.toLowerCase() !== 'cliente';
+  const hayHora    = horaRec && horaRec.toLowerCase() !== 'null';
 
   let ticketText = `\n\n`;
   ticketText += `   ${SHOP_NAME}\n`;
@@ -246,30 +326,26 @@ async function printA4(order, pin, printerName) {
   ticketText += `   ${separator}\n`;
   ticketText += `   Fecha: ${fecha}      Hora: ${hora}\n`;
 
-  if (order.cliente && order.cliente.toLowerCase() !== 'cliente') {
-    ticketText += `   Cliente: ${order.cliente}\n`;
-  }
-  
-  if (order.hora && String(order.hora).toLowerCase() !== 'null') {
-    ticketText += `   HORA RECOGIDA: ${order.hora}\n`;
-  }
-  
+  if (hayCliente) ticketText += `   Cliente: ${cliente}\n`;
+  if (hayHora)    ticketText += `   HORA RECOGIDA: ${horaRec}\n`;
+
   ticketText += `   ${subSeparator}\n\n`;
 
   for (const item of order.articulos) {
-    const cant = (item.cantidad || '').padEnd(12, ' ');
-    ticketText += `   ${cant} ${item.producto}\n`;
+    const cant = String(item?.cantidad ?? '').padEnd(12, ' ');
+    ticketText += `   ${cant} ${String(item?.producto ?? '')}\n`;
   }
 
   ticketText += `\n   ${separator}\n`;
   ticketText += `   Gracias por su confianza.\n\n\n`;
 
-  const tempFilePath = path.join(__dirname, `ticket_${pin}_A4_${Date.now()}.txt`);
+  const tempFilePath = path.join(os.tmpdir(), `ticket_${pin}_A4_${Date.now()}.txt`);
 
   try {
     fs.writeFileSync(tempFilePath, '\ufeff' + ticketText, 'utf8');
-    const command = `notepad.exe /pt "${tempFilePath}" "${printerName}"`;
-    await execPromise(command, { timeout: 20000 });
+    // execFile no pasa por el shell: un nombre de impresora con comillas o & se
+    // trata como argumento literal, no como comando.
+    await execFilePromise('notepad.exe', ['/pt', tempFilePath, printerName], { timeout: 20000 });
     log('PRINT', `Folio A4 ${pin} enviado a: ${printerName}`);
   } finally {
     try { if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath); } catch {}
@@ -380,26 +456,21 @@ app.post('/api/printer', (req, res) => {
 });
 
 app.post('/api/printer/test', async (req, res) => {
-  const ifaceRaw = (req.body?.interface ?? currentPrinter).trim();
-  const profileRaw = req.body?.profile ?? printerProfiles[currentPrinter] ?? 'label_square';
-  
-  const prevPrinter = currentPrinter;
-  const prevProfiles = { ...printerProfiles };
-  
-  currentPrinter = ifaceRaw;
-  printerProfiles[ifaceRaw] = profileRaw;
-  
+  const raw = req.body?.interface ?? currentPrinter;
+  if (typeof raw !== 'string' || !raw.trim()) return res.status(400).json({ error: 'Interfaz inválida' });
+
+  // Mismo normalizado que POST /api/printer, para buscar el perfil con la misma clave.
+  const iface   = raw.replace(/^(printer:|tcp:\/\/)/i, '').trim();
+  const profile = req.body?.profile ?? printerProfiles[iface] ?? 'label_square';
+
   try {
     const mockOrder = { cliente: 'Prueba', articulos: [{ cantidad: '1 ud', producto: 'TEST IMPRESORA OK' }] };
-    await printTicket(mockOrder, 'TEST');
-    log('WEB', `Test impresora OK: ${getPrinterName(ifaceRaw)} (${profileRaw})`);
+    await printTicket(mockOrder, 'TEST', iface, profile);
+    log('WEB', `Test impresora OK: ${getPrinterName(iface)} (${profile})`);
     res.json({ ok: true });
   } catch (err) {
     log('ERROR', `Test impresora: ${err.message}`);
     res.status(500).json({ ok: false, error: err.message });
-  } finally {
-    currentPrinter = prevPrinter; 
-    printerProfiles = prevProfiles;
   }
 });
 
@@ -418,7 +489,19 @@ app.post('/api/whatsapp/reset', async (req, res) => {
   setTimeout(() => process.exit(1), 1000);
 });
 
-app.listen(Number(PORT), '0.0.0.0', () => log('WEB', `Panel disponible en http://localhost:${PORT}`));
+const server = app.listen(SERVER_PORT, HOST, () => {
+  log('WEB', `Panel disponible en http://localhost:${SERVER_PORT}`);
+  if (HOST === '0.0.0.0') {
+    log('WARN', 'El panel escucha en toda la red local y no tiene autenticación.');
+    log('WARN', 'Si solo lo abres en este PC, añade HOST=127.0.0.1 a tu .env.');
+  }
+});
+
+server.on('error', err => {
+  if (err.code === 'EADDRINUSE') log('ERROR', `El puerto ${SERVER_PORT} ya está ocupado. ¿Hay otra instancia del bot abierta?`);
+  else log('ERROR', `Servidor web: ${err.message}`);
+  process.exit(1);
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GROQ
@@ -430,7 +513,7 @@ async function extractOrder(text) {
   const response = await groq.chat.completions.create({
     model:       'openai/gpt-oss-120b',
     temperature: 0.1,
-    max_tokens:  400,
+    max_tokens:  1000,
     messages: [{
       role:    'user',
       content:
@@ -476,7 +559,7 @@ const client = new Client({
 
 client.on('qr', qr => {
   waState = 'QR';
-  waQrUrl = `[https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=$](https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=$){encodeURIComponent(qr)}`;
+  waQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(qr)}`;
   broadcastWaState();
   
   console.log('\n══════════════════════════════════════════════');
@@ -520,8 +603,11 @@ client.on('message', async msg => {
   if (processedMsgIds.has(msg.id._serialized)) return;
   
   processedMsgIds.add(msg.id._serialized);
-  // Limpieza de memoria automática para que el Set no crezca al infinito
-  if (processedMsgIds.size > 1000) processedMsgIds.clear();
+  // Se descartan solo los más antiguos: vaciar el Set entero permitiría reprocesar
+  // un mensaje reenviado y duplicar el pedido.
+  while (processedMsgIds.size > 1000) {
+    processedMsgIds.delete(processedMsgIds.values().next().value);
+  }
 
   const senderId = msg.from;
   const text     = msg.body.trim();
@@ -571,15 +657,20 @@ async function processOrder(senderId, text, msg) {
     return;
   }
 
-  if (!order?.articulos?.length) return;
+  if (!Array.isArray(order?.articulos) || !order.articulos.length) return;
 
   const pin    = genPin();
-  const id     = `${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+  const id     = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const record = {
     id, pin,
-    cliente:    order.cliente  ?? 'Cliente',
-    hora:       order.hora     ?? null,
-    articulos:  order.articulos,
+    cliente:    order.cliente == null ? 'Cliente' : String(order.cliente),
+    hora:       order.hora    == null ? null      : String(order.hora),
+    // La IA a veces devuelve la cantidad como número; se normaliza aquí, en la
+    // frontera, para que ni el ticket ni el panel tengan que suponer el tipo.
+    articulos:  order.articulos.map(a => ({
+      cantidad: String(a?.cantidad ?? ''),
+      producto: String(a?.producto ?? ''),
+    })),
     createdAt:  new Date().toISOString(),
     status:     'pending',
     printError: null,
@@ -599,10 +690,15 @@ async function processOrder(senderId, text, msg) {
   }
 
   try {
-    const lista = order.articulos.map(a => `• ${a.cantidad} ${a.producto}`).join('\n');
+    const lista = record.articulos.map(a => `• ${a.cantidad} ${a.producto}`).join('\n');
     await msg.reply(`✅ ¡Pedido recibido!\n\n${lista}\n\nCódigo de recogida: *${pin}*\nIndícalo al llegar al mostrador.`);
   } catch (e) { log('ERROR', `Reply WhatsApp: ${e.message}`); }
 }
+
+// Sin esto, una promesa rechazada sin capturar tumba el proceso en Node 18+.
+process.on('unhandledRejection', err => {
+  log('ERROR', `Promesa sin capturar: ${err?.message ?? err}`);
+});
 
 process.on('SIGINT', async () => {
   log('SYS', 'Cerrando servicio...');

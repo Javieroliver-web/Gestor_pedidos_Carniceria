@@ -1,6 +1,6 @@
 # Sistema de Pedidos WhatsApp — Carnicería Bot
 
-Un sistema completo de punto de venta (POS) y recepción de pedidos automatizado vía WhatsApp. Diseñado originalmente para la Carnicería Raúl Oliver, el bot recibe los mensajes, utiliza Inteligencia Artificial (Groq - Llama 3) para extraer los productos y cantidades, y los envía automáticamente a la cola de impresión del local, reflejándolos en un panel de control web en tiempo real.
+Un sistema completo de punto de venta (POS) y recepción de pedidos automatizado vía WhatsApp. Diseñado originalmente para la Carnicería Raúl Oliver, el bot recibe los mensajes, utiliza Inteligencia Artificial (Groq - GPT-OSS 120B) para extraer los productos y cantidades, y los envía automáticamente a la cola de impresión del local, reflejándolos en un panel de control web en tiempo real.
 
 ## Características principales
 - **Extracción por IA:** Entiende lenguaje natural y extrae el JSON del pedido automáticamente.
@@ -39,7 +39,7 @@ Gestor_pedidos_Carniceria/
 ### 2. Clonar el repositorio
 Abre un terminal (PowerShell o CMD) y ejecuta:
 ```powershell
-git clone [https://github.com/TU_USUARIO/Gestor_pedidos_Carniceria.git](https://github.com/TU_USUARIO/Gestor_pedidos_Carniceria.git)
+git clone https://github.com/TU_USUARIO/Gestor_pedidos_Carniceria.git
 cd Gestor_pedidos_Carniceria
 ```
 
@@ -49,12 +49,15 @@ npm install
 ```
 
 ### 4. Configurar variables de entorno
-Crea un archivo llamado `.env` en la raíz del proyecto (puedes usar el contenido de `.env.example` como plantilla) y añade tus datos. Necesitarás una API Key gratuita de [Groq Console](https://console.groq.com):
+Copia `.env.example` a `.env` (`copy .env.example .env`) y rellena tus datos. Necesitarás una API Key gratuita de [Groq Console](https://console.groq.com):
 ```env
-API_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+GROQ_API_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 PRINTER_INTERFACE=Brother XXXXXXX
-SHOP_NAME="NAME"
+SHOP_NAME="CARNICERÍA RAÚL OLIVER"
 PORT=3000
+# 127.0.0.1 = solo este PC. 0.0.0.0 abre el panel a toda la red local,
+# y el panel NO pide contraseña: úsalo solo en una red de confianza.
+HOST=127.0.0.1
 ```
 
 ### 5. Primera ejecución y vinculación
@@ -93,7 +96,7 @@ Desde esta interfaz de administrador puedes:
 ```text
 Cliente (WhatsApp) 
   ↳ Filtro Regex local (ignora mensajes no comerciales)
-    ↳ Groq API (Modelo Llama-3-8b: Pasa texto a JSON)
+    ↳ Groq API (Modelo openai/gpt-oss-120b: Pasa texto a JSON)
       ↳ Backend Node.js (Guarda y emite evento SSE)
         ├── Impresora Local (Motor PowerShell/.NET Raw)
         ├── Panel Web (Actualiza el DOM en vivo)
