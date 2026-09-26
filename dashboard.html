@@ -145,6 +145,65 @@ body { font-family: system-ui,-apple-system,sans-serif; background:var(--bg); co
 
 .spin { display:inline-block; width:12px; height:12px; border:2px solid rgba(0,0,0,.3); border-top-color:var(--text); border-radius:50%; animation:spinning .6s linear infinite; }
 @keyframes spinning { to{transform:rotate(360deg)} }
+/* Día de recogida, revisar y relevos */
+.card-dia { font-size:13px; font-weight:600; color:var(--amber); margin:-4px 0 8px; }
+.card-dia.none { color:var(--red); }
+.rev-banner { background:var(--amber-light); border-top:1px solid #fcd34d; padding:8px 14px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.rev-msg { font-size:11px; color:#92400e; flex:1; min-width:0; line-height:1.4; }
+.rev-msg strong { display:block; font-weight:700; margin-bottom:1px; }
+.btn-rev { flex-shrink:0; padding:5px 11px; border-radius:6px; font-size:11px; font-weight:600; background:var(--amber); color:#fff; border:none; cursor:pointer; }
+.item.dudoso span:last-child::after { content:' (?)'; color:var(--amber); font-weight:700; }
+.handoffs { margin:12px 20px 0; background:var(--amber-light); border:1px solid #fcd34d; border-radius:12px; padding:10px 14px; display:none; }
+.handoffs.show { display:block; }
+.handoffs-title { font-size:12px; font-weight:700; color:#92400e; margin-bottom:6px; }
+.handoff { display:flex; align-items:center; gap:10px; padding:6px 0; border-top:1px solid #fde68a; font-size:12px; flex-wrap:wrap; }
+.handoff:first-of-type { border-top:none; }
+.handoff-num { font-family:'Courier New',monospace; font-weight:700; }
+.handoff-why { color:#92400e; flex:1; min-width:160px; }
+.handoff-until { color:var(--text2); font-size:11px; }
+.inc-tabs { display:flex; gap:6px; margin-bottom:12px; }
+.inc-row { border-bottom:1px solid var(--border); padding:8px 0; font-size:12px; }
+.inc-row .when { color:var(--text3); font-family:'Courier New',monospace; font-size:11px; }
+.inc-row .what { font-weight:600; margin:2px 0; }
+.inc-row .txt { color:var(--text2); white-space:pre-wrap; word-break:break-word; }
+.modal.wide { max-width:640px; }
+/* Información para desarrolladores */
+.dev-wrap { position:relative; }
+.show-sm { display:none; }
+@media (max-width: 760px) { .show-sm { display:inline; } }
+.dev-panel { position:absolute; top:calc(100% + 10px); left:0; width:380px; max-width:calc(100vw - 24px); max-height:calc(100vh - 80px); overflow-y:auto; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:12px; box-shadow:0 12px 40px rgba(0,0,0,.25); z-index:150; padding:14px; display:none; font-size:12px; }
+.dev-panel.open { display:block; animation:slideUp .15s ease; }
+.dev-sec { margin-bottom:14px; }
+.dev-sec:last-child { margin-bottom:0; }
+.dev-h { font-size:10px; font-weight:700; letter-spacing:.6px; text-transform:uppercase; color:var(--text3); margin-bottom:8px; display:flex; justify-content:space-between; }
+.dev-row { display:flex; justify-content:space-between; gap:10px; padding:3px 0; }
+.dev-row span:first-child { color:var(--text2); }
+.dev-row span:last-child { font-family:'Courier New',monospace; font-weight:600; text-align:right; }
+.meter { margin:6px 0 8px; }
+.meter-top { display:flex; justify-content:space-between; margin-bottom:4px; }
+.meter-top b { font-family:'Courier New',monospace; }
+.meter-bar { height:8px; background:var(--surface2); border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+.meter-fill { height:100%; border-radius:6px; background:var(--green); transition:width .3s; }
+.meter-fill.mid { background:var(--amber); } .meter-fill.low { background:var(--red); }
+.meter-sub { font-size:10px; color:var(--text3); margin-top:3px; }
+.cnt-head { display:flex; align-items:center; gap:8px; margin:6px 0 4px; font-weight:700; }
+.cnt-big { font-family:'Courier New',monospace; font-size:18px; min-width:30px; text-align:center; border-radius:6px; padding:1px 6px; }
+.cnt-big.err { background:var(--red-light); color:var(--red); }
+.cnt-big.warn { background:var(--amber-light); color:var(--amber); }
+.cnt-today { font-weight:400; color:var(--text3); font-size:11px; }
+.cnt-cats { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:6px; }
+.cnt-cat { display:inline-flex; align-items:center; gap:5px; border:1px solid var(--border); border-radius:20px; padding:2px 4px 2px 9px; font-size:11px; color:var(--text2); }
+.cnt-cat b { font-family:'Courier New',monospace; font-size:11px; min-width:18px; text-align:center; border-radius:10px; padding:0 5px; background:var(--surface2); color:var(--text); }
+.cnt-cat.zero { opacity:.45; }
+.cnt-cat.err b { background:var(--red); color:#fff; } .cnt-cat.warn b { background:var(--amber); color:#fff; }
+@media (max-width: 760px) {
+  .header { height:auto; min-height:54px; padding:8px 12px; flex-wrap:wrap; }
+  .header-left, .header-right { flex-wrap:wrap; gap:6px; }
+  .hbtn .hide-sm { display:none; }
+  .dev-panel { position:fixed; top:auto; left:12px; right:12px; width:auto; margin-top:8px; }
+  .stats { overflow-x:auto; padding:0 12px; }
+}
+.dev-note { font-size:11px; color:var(--amber); background:var(--amber-light); border-radius:8px; padding:6px 8px; margin-top:6px; }
 </style>
 </head>
 <body>
@@ -158,9 +217,21 @@ body { font-family: system-ui,-apple-system,sans-serif; background:var(--bg); co
       <span class="status-dot red" id="waDot"></span>
       <span id="waLabel">Conectando...</span>
     </button>
+    <div class="dev-wrap">
+      <button class="hbtn" id="devBtn" onclick="toggleDev(event)" title="Estado de la IA, registros y sistema">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        <span class="hide-sm">Información para desarrolladores</span><span class="show-sm">Dev</span>
+        <span class="tab-badge" id="devBadge" style="display:none">0</span>
+      </button>
+      <div class="dev-panel" id="devPanel" onclick="event.stopPropagation()"><div style="color:var(--text3)">Cargando...</div></div>
+    </div>
   </div>
 
   <div class="header-right">
+    <button class="hbtn" onclick="openIncModal()" title="Mensajes que el bot no supo atender y errores">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
+      Incidencias
+    </button>
     <button class="hbtn" id="soundBtn" onclick="toggleSound()">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 010 7.07"/><path d="M19.07 4.93a10 10 0 010 14.14"/></svg>
       Sonido
@@ -185,6 +256,7 @@ body { font-family: system-ui,-apple-system,sans-serif; background:var(--bg); co
   <div class="stats-spc"></div>
 </div>
 
+<div class="handoffs" id="handoffs"></div>
 <div class="tabs">
   <button class="tab active" id="tab-active" onclick="setTab('active')">En curso</button>
   <button class="tab"        id="tab-fail"   onclick="setTab('fail')">Fallos <span class="tab-badge" id="failBadge" style="display:none">0</span></button>
@@ -192,6 +264,23 @@ body { font-family: system-ui,-apple-system,sans-serif; background:var(--bg); co
 </div>
 
 <div class="grid" id="grid"></div>
+
+<!-- ── MODAL DE INCIDENCIAS ──────────────────────────────────────────────── -->
+<div class="overlay hidden" id="incOverlay" onclick="if(event.target===this)closeIncModal()">
+  <div class="modal wide">
+    <div class="modal-header">
+      <div class="modal-title">Incidencias del bot</div>
+      <button class="modal-close" onclick="closeIncModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="inc-tabs">
+        <button class="mbtn primary" id="incTab-fallos" onclick="loadInc('fallos')">Warnings (mensajes no resueltos)</button>
+        <button class="mbtn" id="incTab-errores" onclick="loadInc('errores')">Errores</button>
+      </div>
+      <div id="incList"></div>
+    </div>
+  </div>
+</div>
 
 <!-- ── MODAL DE WHATSAPP ─────────────────────────────────────────────────── -->
 <div class="overlay hidden" id="waOverlay" onclick="handleWaOverlayClick(event)">
@@ -322,6 +411,7 @@ function renderWaStatus(state, qrUrl) {
 }
 
 // ── SSE ───────────────────────────────────────────────────────────────────────
+setTimeout(()=>{ fetch('/api/dev').then(r=>r.json()).then(d=>{ const b=document.getElementById('devBadge'); b.style.display=d.logs.errores.hoy?'flex':'none'; b.textContent=d.logs.errores.hoy; }).catch(()=>{}); },500);
 (function connectSSE(){
   const es=new EventSource('/events');
   es.addEventListener('init',e=>{
@@ -332,6 +422,12 @@ function renderWaStatus(state, qrUrl) {
     updatePrinterLabel(d.printer);
     renderWaStatus(d.waState, d.waQrUrl);
     store.clear(); d.orders.forEach(o=>store.set(o.id,o)); render();
+    renderHandoffs(d.handoffs||[]);
+  });
+  es.addEventListener('handoffs',e=>{
+    const list=JSON.parse(e.data);
+    if(list.length>handoffList.length) beep();
+    renderHandoffs(list);
   });
   es.addEventListener('new_order',e=>{
     const o=JSON.parse(e.data); store.set(o.id,o); render(); beep();
@@ -382,7 +478,7 @@ function render(){
   
   visible.forEach((o,idx)=>{
     const ex=document.getElementById('c-'+o.id);
-    const changed=!ex||ex.dataset.status!==o.status||ex.dataset.pe!==String(!!o.printError);
+    const changed=!ex||ex.dataset.status!==o.status||ex.dataset.pe!==String(!!o.printError)||ex.dataset.rev!==String(!!o.revisar);
     if(changed){
       const div=document.createElement('div'); div.innerHTML=cardHTML(o);
       const ne=div.firstElementChild;
@@ -399,7 +495,7 @@ function esc(v){ return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;'
 
 function cardHTML(o){
   const labels={pending:'PENDIENTE',ready:'LISTO ✓',done:'RECOGIDO',discarded:'DESCARTADO'};
-  const items=(o.articulos||[]).map(a=>`<div class="item"><span class="item-qty">${esc(a.cantidad)}</span><span>${esc(a.producto)}</span></div>`).join('');
+  const items=(o.articulos||[]).map(a=>`<div class="item${a.dudoso?' dudoso':''}"><span class="item-qty">${esc(a.cantidad)}</span><span>${esc(a.producto)}</span></div>`).join('');
   const readyCls=o.status!=='pending'?'is-done':''; const inactive=['done','discarded'].includes(o.status); const isConf=confirming.has(o.id);
   const errBanner=o.printError?`<div class="err-banner"><div class="err-msg"><strong>⚠ Error al imprimir</strong>${esc(o.printError.message)}${o.printError.retries>0?' · '+esc(o.printError.retries)+' reintento(s)':''}</div><button class="btn-retry" id="retry-${esc(o.id)}" onclick="retryPrint('${esc(o.id)}')" ${inactive?'disabled':''}>Reintentar</button></div>`:'';
   
@@ -412,7 +508,8 @@ function cardHTML(o){
     <button class="btn btn-discard ${isConf?'conf':''}" id="dis-${o.id}" onclick="handleDiscard('${o.id}')">${isConf?'¿Descartar?':'✕'}</button>
   </div>`;
   
-  return `<div class="card status-${esc(o.status)} ${o.printError?'has-print-error':''}" id="c-${esc(o.id)}" data-id="${esc(o.id)}" data-status="${esc(o.status)}" data-pe="${!!o.printError}"><div class="card-pin"><div class="pin-code">${esc(o.pin)}</div><div class="pin-side"><div class="pin-time">${ft(o.createdAt)}</div><span class="status-pill">${esc(labels[o.status]??o.status)}</span></div></div>${errBanner}<div class="card-body"><div class="card-name">${esc(o.cliente||'Cliente')}</div><div style="height:1px; background:var(--border); margin-bottom:10px;"></div><div class="items">${items}</div></div>${actions}</div>`;
+  const revBanner=o.revisar&&!inactive?`<div class="rev-banner"><div class="rev-msg"><strong>⚠ Revisar con el cliente</strong>${esc(o.motivoRevision||'')}</div><button class="btn-rev" onclick="markReviewed('${esc(o.id)}')">Revisado</button></div>`:'';
+  return `<div class="card status-${esc(o.status)} ${o.printError?'has-print-error':''}" id="c-${esc(o.id)}" data-id="${esc(o.id)}" data-status="${esc(o.status)}" data-pe="${!!o.printError}" data-rev="${!!o.revisar}"><div class="card-pin"><div class="pin-code">${esc(o.pin)}</div><div class="pin-side"><div class="pin-time">${ft(o.createdAt)}</div><span class="status-pill">${esc(labels[o.status]??o.status)}</span></div></div>${errBanner}${revBanner}<div class="card-body"><div class="card-name">${esc(o.cliente||'Cliente')}</div>${o.diaLargo?`<div class="card-dia">📅 Recoge: ${esc(o.diaLargo)}</div>`:(o.hora?`<div class="card-dia">🕒 Recoge: ${esc(o.hora)}</div>`:`<div class="card-dia none">📅 Sin día de recogida</div>`)}<div style="height:1px; background:var(--border); margin-bottom:10px;"></div><div class="items">${items}</div></div>${actions}</div>`;
 }
 
 // ── Card actions ──────────────────────────────────────────────────────────────
@@ -427,6 +524,102 @@ async function reprintOrder(id, btn){
   await fetch('/api/orders/'+id+'/retry-print',{method:'POST'}); 
   btn.disabled=false; 
   btn.innerHTML=prev; 
+}
+
+async function markReviewed(id){ await fetch('/api/orders/'+id+'/reviewed',{method:'POST'}); }
+
+// ── Relevos: clientes que esperan a una persona ───────────────────────────────
+let handoffList=[];
+function renderHandoffs(list){
+  handoffList=list;
+  const box=document.getElementById('handoffs');
+  if(!list.length){ box.classList.remove('show'); box.innerHTML=''; return; }
+  box.classList.add('show');
+  box.innerHTML=`<div class="handoffs-title">🙋 ${list.length} cliente(s) esperando a una persona — el bot no les contesta hasta medianoche</div>`+
+    list.map(h=>`<div class="handoff"><span class="handoff-num">+${esc(h.sender)}</span><span class="handoff-why">${esc(h.motivo)}${h.mensaje?' — “'+esc(String(h.mensaje).slice(0,80))+'”':''}</span><span class="handoff-until">desde ${ft(h.desde)}</span><button class="mbtn" style="padding:5px 10px;font-size:11px" onclick="releaseHandoff('${esc(h.sender)}')">Devolver al bot</button></div>`).join('');
+}
+async function releaseHandoff(sender){ await fetch('/api/handoffs/'+encodeURIComponent(sender)+'/release',{method:'POST'}); }
+
+// ── Incidencias ───────────────────────────────────────────────────────────────
+function openIncModal(){ document.getElementById('incOverlay').classList.remove('hidden'); loadInc('fallos'); }
+function closeIncModal(){ document.getElementById('incOverlay').classList.add('hidden'); }
+async function loadInc(tipo){
+  ['fallos','errores'].forEach(t=>document.getElementById('incTab-'+t).classList.toggle('primary',t===tipo));
+  const list=document.getElementById('incList');
+  list.innerHTML='<div style="font-size:12px;color:var(--text3)">Cargando...</div>';
+  try{
+    const rows=await (await fetch('/api/incidencias?tipo='+tipo+'&limit=200')).json();
+    if(!rows.length){ list.innerHTML='<div style="font-size:12px;color:var(--text3)">Sin registros.</div>'; return; }
+    list.innerHTML=rows.map(r=>{
+      const when=new Date(r.fecha).toLocaleString('es-ES',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+      const what=tipo==='fallos'?r.motivo:`[${r.origen}] ${r.error}`;
+      return `<div class="inc-row"><div class="when">${esc(when)}${r.cliente?' · +'+esc(r.cliente):''}</div><div class="what">${esc(what)}</div>${r.mensaje?`<div class="txt">${esc(r.mensaje)}</div>`:''}</div>`;
+    }).join('');
+  }catch{ list.innerHTML='<div style="font-size:12px;color:var(--red)">No se pudieron cargar las incidencias.</div>'; }
+}
+
+// ── Información para desarrolladores ──────────────────────────────────────────
+let devTimer=null;
+function toggleDev(e){
+  e.stopPropagation();
+  const p=document.getElementById('devPanel');
+  if(p.classList.toggle('open')){ loadDev(); devTimer=setInterval(loadDev,10000); }
+  else { clearInterval(devTimer); }
+}
+document.addEventListener('click',()=>{ const p=document.getElementById('devPanel'); if(p&&p.classList.contains('open')){ p.classList.remove('open'); clearInterval(devTimer); } });
+
+function fmtAgo(iso){ if(!iso) return '—'; const s=Math.round((Date.now()-new Date(iso))/1000); if(s<60) return 'hace '+s+' s'; if(s<3600) return 'hace '+Math.round(s/60)+' min'; if(s<86400) return 'hace '+Math.round(s/3600)+' h'; return new Date(iso).toLocaleDateString('es-ES'); }
+function fmtUp(sec){ const d=Math.floor(sec/86400),h=Math.floor(sec%86400/3600),m=Math.floor(sec%3600/60); return (d?d+'d ':'')+h+'h '+m+'m'; }
+function meter(label, m){
+  if(!m||m.limite==null) return `<div class="meter"><div class="meter-top"><span>${label}</span><b>sin datos</b></div><div class="meter-bar"><div class="meter-fill" style="width:0"></div></div><div class="meter-sub">Se actualiza con la próxima llamada a Groq</div></div>`;
+  const pct=Math.max(0,Math.min(100,m.restantePct??0)); const cls=pct<15?'low':pct<40?'mid':'';
+  return `<div class="meter"><div class="meter-top"><span>${label}</span><b>${pct}% libre</b></div><div class="meter-bar"><div class="meter-fill ${cls}" style="width:${pct}%"></div></div><div class="meter-sub">${esc(m.restantes)} de ${esc(m.limite)} restantes${m.reinicio?' · se reinicia en '+esc(m.reinicio):''}</div></div>`;
+}
+function counters(title, data, cls){
+  const cats=Object.entries(data.categorias).map(([k,c])=>`<span class="cnt-cat ${c.total?cls:'zero'}" title="Hoy: ${c.hoy}">${esc(c.etiqueta)} <b>${c.total}</b></span>`).join('');
+  return `<div class="cnt-head"><span class="cnt-big ${cls}">${data.total}</span>${title} <span class="cnt-today">· ${data.hoy} hoy${data.ultima?' · último '+fmtAgo(data.ultima):''}</span></div><div class="cnt-cats">${cats}</div>`;
+}
+async function loadDev(){
+  const p=document.getElementById('devPanel');
+  try{
+    const d=await (await fetch('/api/dev')).json();
+    const g=d.ia.groq, gm=d.ia.gemini, c=d.ia.clasificaciones;
+    const badge=document.getElementById('devBadge'); badge.style.display=d.logs.errores.hoy?'flex':'none'; badge.textContent=d.logs.errores.hoy;
+    p.innerHTML=`
+      <div class="dev-sec"><div class="dev-h"><span>IA · Groq</span><span>${esc(g.modelo)}</span></div>
+        ${meter('Peticiones del día', g.limites?.peticionesDia)}
+        ${meter('Tokens por minuto', g.limites?.tokensMinuto)}
+        <div class="dev-row"><span>Llamadas / errores</span><span>${g.llamadas} / ${g.errores}</span></div>
+        <div class="dev-row"><span>Última latencia</span><span>${g.ultimaLatenciaMs!=null?g.ultimaLatenciaMs+' ms':'—'}</span></div>
+        <div class="dev-row"><span>Última llamada</span><span>${fmtAgo(g.ultimaLlamada)}</span></div>
+        <div class="dev-row"><span>Tokens consumidos</span><span>${g.tokensUsados.toLocaleString('es-ES')}</span></div>
+        ${g.ultimoError?`<div class="dev-note">Último error (${fmtAgo(g.ultimoError.fecha)}): ${esc(g.ultimoError.mensaje)}</div>`:''}
+      </div>
+      <div class="dev-sec"><div class="dev-h"><span>IA · Gemini (respaldo)</span><span>${gm.activo?esc(gm.modelo):'desactivado'}</span></div>
+        <div class="dev-row"><span>Veces que ha rescatado a Groq</span><span>${d.ia.fallbacks}</span></div>
+        <div class="dev-row"><span>Llamadas / errores</span><span>${gm.llamadas} / ${gm.errores}</span></div>
+        ${gm.ultimoError?`<div class="dev-note">Último error: ${esc(gm.ultimoError.mensaje)}</div>`:''}
+      </div>
+      <div class="dev-sec"><div class="dev-h"><span>Clasificación de mensajes</span><span>desde ${new Date(d.ia.inicio).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</span></div>
+        <div class="dev-row"><span>Pedidos · Horario · Carta · Saludos</span><span>${c.pedido} · ${c.horario} · ${c.carta??0} · ${c.saludo+c.agradecimiento}</span></div>
+        <div class="dev-row"><span>Pasados a persona</span><span>${c.relevo}</span></div>
+        <div class="dev-row"><span>Respuestas de IA no válidas</span><span>${d.ia.respuestasInvalidas}</span></div>
+      </div>
+      <div class="dev-sec"><div class="dev-h"><span>Registros (logs/)</span><span style="cursor:pointer;text-decoration:underline" onclick="openIncModal()">ver detalle</span></div>
+        ${counters('Errores', d.logs.errores, 'err')}
+        ${counters('Warnings', d.logs.warnings, 'warn')}
+      </div>
+      <div class="dev-sec"><div class="dev-h"><span>Sistema</span><span>${esc(d.sistema.node)}</span></div>
+        <div class="dev-row"><span>WhatsApp</span><span>${esc(d.whatsapp.estado)}</span></div>
+        <div class="dev-row"><span>Pedidos activos / para revisar</span><span>${d.pedidos.pendientes} / ${d.pedidos.paraRevisar}</span></div>
+        <div class="dev-row"><span>Esperando día / relevos activos</span><span>${d.pedidos.esperandoDia} / ${d.relevosActivos}</span></div>
+        <div class="dev-row"><span>Productos en la carta</span><span>${d.productosEnCarta}</span></div>
+        <div class="dev-row"><span>En marcha</span><span>${fmtUp(d.sistema.uptimeSeg)}</span></div>
+        <div class="dev-row"><span>Memoria</span><span>${d.sistema.memoriaMB} MB</span></div>
+        <div class="dev-row"><span>Escucha en</span><span>${esc(d.sistema.host)}:${d.sistema.puerto}</span></div>
+        ${d.festivos?`<div class="dev-note">${esc(d.festivos)}</div>`:''}
+      </div>`;
+  }catch{ p.innerHTML='<div style="color:var(--red)">No se pudo obtener la información.</div>'; }
 }
 
 // ── WA Modal ──────────────────────────────────────────────────────────────────

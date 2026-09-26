@@ -6,15 +6,35 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 
 const {
-  SHOP_NAME, PORT, log,
+  SHOP_NAME, PORT, HOST, log,
   loadOrders, saveOrders,
-  getCurrentPrinter, setCurrentPrinter, getProfiles, savePrinterConfig,
+  getCurrentPrinter, getProfiles, savePrinterConfig,
   genPin, getPrinterName
 } = require('./src/config');
 
-const { extractOrder, extractTimeOnly } = require('./src/services/aiService');
+const { classifyMessage, getAiStats } = require('./src/services/aiService');
 const { printTicket, listWindowsPrinters } = require('./src/services/printService');
+const { logFallo, logError, readRecent, logSummary } = require('./src/services/incidentLog');
+const schedule = require('./src/schedule');
+const catalog = require('./src/catalog');
 
+// ── Textos fijos que recibe el cliente (la IA nunca redacta respuestas) ──────
+const MSG = {
+  saludo:
+    '¡Hola! 👋 Soy el asistente de la Carnicería Raúl Oliver.\n\n' +
+    'Puedes hacerme tu pedido por aquí (por ejemplo: _1 kg de lomo y 6 filetes de pollo_) ' +
+    'o preguntarme por el horario.',
+  agradecimiento: '¡Gracias a ti! 😊',
+  relevo:
+    '🙋 Esta consulta tiene que verla una persona de la carnicería. ' +
+    'Te contestaremos por aquí lo antes posible.',
+  relevoPedido:
+    '🙋 Hay algo de tu pedido que tiene que revisar una persona de la carnicería. ' +
+    'Te escribiremos por aquí para confirmarlo.',
+  diaNoEntendido: 'No he entendido el día. Responde solo con el número de la opción, por favor.',
+};
+
+// ── Pedidos ───────────────────────────────────────────────────────────────────
 const orders = loadOrders();
 
 function cleanupOldOrders() {
@@ -30,6 +50,51 @@ function cleanupOldOrders() {
 cleanupOldOrders();
 setInterval(cleanupOldOrders, 6 * 60 * 60 * 1000);
 
+// ── Relevo a persona: el bot deja de contestar a ese cliente hasta medianoche ─
+const HANDOFFS_FILE = path.join(__dirname, 'handoffs.json');
+const handoffs = new Map(); // sender -> { sender, desde, hasta, motivo, mensaje }
+
+(function loadHandoffs() {
+  try {
+    if (fs.existsSync(HANDOFFS_FILE)) {
+      for (const h of JSON.parse(fs.readFileSync(HANDOFFS_FILE, 'utf8'))) handoffs.set(h.sender, h);
+    }
+  } catch (e) { log('WARN', `handoffs.json: ${e.message}`); }
+})();
+
+function saveHandoffs() {
+  try { fs.writeFileSync(HANDOFFS_FILE, JSON.stringify([...handoffs.values()], null, 2)); }
+  catch (e) { log('ERROR', `No se pudo guardar handoffs.json: ${e.message}`); }
+}
+
+function activeHandoffs() {
+  const now = Date.now();
+  let changed = false;
+  for (const [k, h] of handoffs) if (new Date(h.hasta).getTime() <= now) { handoffs.delete(k); changed = true; }
+  if (changed) { saveHandoffs(); broadcast('handoffs', [...handoffs.values()]); }
+  return [...handoffs.values()];
+}
+setInterval(activeHandoffs, 60 * 1000);
+
+function isInHandoff(sender) {
+  const h = handoffs.get(sender);
+  return Boolean(h && new Date(h.hasta).getTime() > Date.now());
+}
+
+/** Pasa el cliente a una persona. Si replyText es null no se envía nada al cliente. */
+async function startHandoff(senderId, msg, motivo, texto, replyText = MSG.relevo, categoria = 'consulta') {
+  const sender = senderId.split('@')[0];
+  const h = { sender, desde: new Date().toISOString(), hasta: schedule.nextMidnight().toISOString(), motivo, categoria, mensaje: texto };
+  handoffs.set(sender, h);
+  saveHandoffs();
+  cancelPendingDay(senderId);
+  broadcast('handoffs', [...handoffs.values()]);
+  logFallo({ categoria, motivo, cliente: sender, mensaje: texto });
+  log('RELEVO', `${sender}: ${motivo}`);
+  if (replyText) { try { await msg.reply(replyText); } catch (e) { logError({ origen: 'whatsapp', error: e, cliente: sender }); } }
+}
+
+// ── SSE ───────────────────────────────────────────────────────────────────────
 let waState = 'STARTING';
 let waQrUrl = '';
 function broadcastWaState() { broadcast('wa_state', { state: waState, qr: waQrUrl }); }
@@ -57,7 +122,8 @@ app.get('/events', (req, res) => {
     printer:  getCurrentPrinter(),
     profiles: getProfiles(),
     waState:  waState,
-    waQrUrl:  waQrUrl
+    waQrUrl:  waQrUrl,
+    handoffs: activeHandoffs(),
   });
 
   const hb = setInterval(() => res.write(':\n\n'), 15000);
@@ -95,6 +161,16 @@ app.post('/api/orders/:id/discard', (req, res) => {
   res.json(o);
 });
 
+// Quitar la marca "Revisar" cuando ya se ha confirmado con el cliente
+app.post('/api/orders/:id/reviewed', (req, res) => {
+  const o = orders.get(req.params.id);
+  if (!o) return res.status(404).json({ error: 'No encontrado' });
+  o.revisar = false;
+  saveOrders(orders); broadcast('order_updated', o);
+  log('WEB', `Pedido ${o.pin} → revisado`);
+  res.json(o);
+});
+
 app.post('/api/orders/:id/retry-print', async (req, res) => {
   const o = orders.get(req.params.id);
   if (!o) return res.status(404).json({ error: 'No encontrado' });
@@ -108,8 +184,50 @@ app.post('/api/orders/:id/retry-print', async (req, res) => {
     o.printError = { message: err.message, timestamp: new Date().toISOString(), retries: (o.printError?.retries ?? 0) + 1 };
     saveOrders(orders); broadcast('order_updated', o);
     log('ERROR', `Reimpresión ${o.pin}: ${err.message}`);
+    logError({ origen: 'impresora', error: err, cliente: o.sender });
     res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+// Relevos activos y devolver un cliente al bot antes de medianoche
+app.get('/api/handoffs', (_req, res) => res.json(activeHandoffs()));
+app.post('/api/handoffs/:sender/release', (req, res) => {
+  if (!handoffs.delete(req.params.sender)) return res.status(404).json({ error: 'No encontrado' });
+  saveHandoffs(); broadcast('handoffs', [...handoffs.values()]);
+  log('WEB', `Cliente ${req.params.sender} devuelto al bot`);
+  res.json({ ok: true });
+});
+
+// Registros para mejorar el bot: /api/incidencias?tipo=fallos|errores
+app.get('/api/incidencias', (req, res) => {
+  const tipo = req.query.tipo === 'errores' ? 'errores' : 'fallos';
+  res.json(readRecent(tipo, Math.min(Number(req.query.limit) || 200, 1000)));
+});
+
+// Información para desarrolladores: estado de la IA, registros y proceso
+const BOOT_TIME = Date.now();
+app.get('/api/dev', (_req, res) => {
+  const all = [...orders.values()];
+  res.json({
+    ia: getAiStats(),
+    logs: logSummary(),
+    whatsapp: { estado: waState },
+    pedidos: {
+      total: all.length,
+      pendientes: all.filter(o => o.status === 'pending').length,
+      paraRevisar: all.filter(o => o.revisar && !['done', 'discarded'].includes(o.status)).length,
+      esperandoDia: pendingDay.size,
+    },
+    relevosActivos: activeHandoffs().length,
+    productosEnCarta: catalog.productCount(),
+    festivos: schedule.missingLocalHolidaysWarning(),
+    sistema: {
+      uptimeSeg: Math.round((Date.now() - BOOT_TIME) / 1000),
+      memoriaMB: Math.round(process.memoryUsage().rss / 1048576),
+      node: process.version,
+      host: HOST, puerto: Number(PORT),
+    },
+  });
 });
 
 app.get('/api/printer', (_req, res) => res.json({ interface: getCurrentPrinter(), profile: getProfiles()[getCurrentPrinter()] }));
@@ -119,43 +237,49 @@ app.get('/api/printers', async (_req, res) => {
   res.json({ printers, current: getCurrentPrinter(), profiles: getProfiles() });
 });
 
-app.post('/api/printer', (req, res) => {
-  const { interface: iface, profile } = req.body;
-  if (!iface || typeof iface !== 'string' || !iface.trim()) return res.status(400).json({ error: 'Interfaz inválida' });
-  
-  const cleanPrinter = iface.replace(/^(printer:|tcp:\/\/)/i, '').trim();
+const VALID_PROFILES = ['label_square', 'a4_paper'];
+
+// Solo se aceptan impresoras que Windows tenga realmente instaladas.
+async function resolvePrinter(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const clean = raw.replace(/^(printer:|tcp:\/\/)/i, '').trim();
+  const installed = await listWindowsPrinters();
+  return installed.includes(clean) ? clean : null;
+}
+
+app.post('/api/printer', async (req, res) => {
+  const { interface: iface, profile } = req.body ?? {};
+  const cleanPrinter = await resolvePrinter(iface);
+  if (!cleanPrinter) return res.status(400).json({ error: 'Impresora no encontrada en Windows' });
+  if (profile && !VALID_PROFILES.includes(profile)) return res.status(400).json({ error: 'Perfil inválido' });
   savePrinterConfig(cleanPrinter, profile);
-  
+
   broadcast('printer_changed', { interface: cleanPrinter, profile: getProfiles()[cleanPrinter] });
   log('WEB', `Impresora activa → ${getPrinterName(cleanPrinter)} | Perfil: ${getProfiles()[cleanPrinter]}`);
   res.json({ ok: true, interface: cleanPrinter, profile: getProfiles()[cleanPrinter] });
 });
 
 app.post('/api/printer/test', async (req, res) => {
-  const ifaceRaw = (req.body?.interface ?? getCurrentPrinter()).trim();
-  const profileRaw = req.body?.profile ?? getProfiles()[getCurrentPrinter()] ?? 'label_square';
-  
-  const prevPrinter = getCurrentPrinter();
-  
-  setCurrentPrinter(ifaceRaw);
-  
+  const ifaceRaw = await resolvePrinter(req.body?.interface ?? getCurrentPrinter());
+  if (!ifaceRaw) return res.status(400).json({ ok: false, error: 'Impresora no encontrada en Windows' });
+  const profileRaw = VALID_PROFILES.includes(req.body?.profile) ? req.body.profile : (getProfiles()[ifaceRaw] ?? 'label_square');
+
   try {
-    const mockOrder = { cliente: 'Prueba', articulos: [{ cantidad: '1 ud', producto: 'TEST IMPRESORA OK' }] };
-    await printTicket(mockOrder, 'TEST');
+    const mockOrder = { cliente: 'Prueba', diaCorto: schedule.formatShort(schedule.madridNow().key), articulos: [{ cantidad: '1 ud', producto: 'TEST IMPRESORA OK' }] };
+    await printTicket(mockOrder, 'TEST', { printerName: ifaceRaw, profile: profileRaw });
     log('WEB', `Test impresora OK: ${getPrinterName(ifaceRaw)} (${profileRaw})`);
     res.json({ ok: true });
   } catch (err) {
     log('ERROR', `Test impresora: ${err.message}`);
+    logError({ origen: 'impresora', error: err });
     res.status(500).json({ ok: false, error: err.message });
-  } finally {
-    setCurrentPrinter(prevPrinter);
   }
 });
 
 app.post('/api/whatsapp/restart', (_req, res) => {
   log('SYS', 'Petición de reinicio de WhatsApp desde Panel...');
   res.json({ ok: true });
-  setTimeout(() => process.exit(1), 1000); 
+  setTimeout(() => process.exit(1), 1000);
 });
 
 app.post('/api/whatsapp/reset', async (_req, res) => {
@@ -166,9 +290,10 @@ app.post('/api/whatsapp/reset', async (_req, res) => {
   setTimeout(() => process.exit(1), 1000);
 });
 
-app.listen(Number(PORT), '0.0.0.0', () => log('WEB', `Panel disponible en http://localhost:${PORT}`));
+// Antes escuchaba siempre en 0.0.0.0 aunque .env dijera HOST=127.0.0.1.
+app.listen(Number(PORT), HOST, () => log('WEB', `Panel disponible en http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}${HOST === '0.0.0.0' ? ' (expuesto a la red local, sin contraseña)' : ''}`));
 
-// ── WhatsApp & Buffer de Mensajes ────────────────────────────────────────────
+// ── WhatsApp ─────────────────────────────────────────────────────────────────
 const BROWSER_PATHS = [
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
@@ -200,152 +325,211 @@ client.on('qr', qr => {
 
 client.on('loading_screen', pct => { waState = 'STARTING'; broadcastWaState(); log('WA', `Cargando... ${pct}%`); });
 client.on('ready', () => { waState = 'CONNECTED'; waQrUrl = ''; broadcastWaState(); log('OK', `WhatsApp conectado — ${SHOP_NAME}`); });
-client.on('auth_failure', msg => { waState = 'ERROR'; broadcastWaState(); log('ERROR', `Auth: ${msg}`); process.exit(1); });
-client.on('disconnected', why => { waState = 'ERROR'; broadcastWaState(); log('WARN', `Desconectado (${why}). Reiniciando...`); process.exit(1); });
+client.on('auth_failure', msg => { waState = 'ERROR'; broadcastWaState(); log('ERROR', `Auth: ${msg}`); logError({ origen: 'whatsapp', error: `auth_failure: ${msg}` }); process.exit(1); });
+client.on('disconnected', why => { waState = 'ERROR'; broadcastWaState(); log('WARN', `Desconectado (${why}). Reiniciando...`); logError({ origen: 'whatsapp', error: `disconnected: ${why}` }); process.exit(1); });
 
 const processedMsgIds = new Set();
 const userBuffers = new Map();
-const pendingHourClients = new Map();
 
+// ── Elección de día pendiente ────────────────────────────────────────────────
+// sender -> { order, days, attempts, expiry, msg }
+const pendingDay = new Map();
+const PENDING_DAY_TTL_MS = 10 * 60 * 1000;
+const MAX_DAY_ATTEMPTS = 2;
+
+function cancelPendingDay(senderId) {
+  const item = pendingDay.get(senderId);
+  if (item) { clearTimeout(item.expiry); pendingDay.delete(senderId); }
+  return item;
+}
+
+// Si el cliente no elige día, el pedido no se pierde: se registra marcado para revisar.
+function setPendingDay(senderId, item) {
+  cancelPendingDay(senderId);
+  item.expiry = setTimeout(async () => {
+    if (pendingDay.get(senderId) !== item) return;
+    pendingDay.delete(senderId);
+    log('WARN', `${senderId.split('@')[0]} no eligió día; pedido registrado para revisar.`);
+    markForReview(item.order, 'El cliente no eligió día de recogida');
+    await finalizeAndPrintOrder(item.order, item.msg, senderId, { categoria: 'sin_respuesta_dia' });
+  }, PENDING_DAY_TTL_MS);
+  pendingDay.set(senderId, item);
+}
+
+function markForReview(order, motivo) {
+  order.revisar = true;
+  order.motivoRevision = order.motivoRevision ? `${order.motivoRevision} · ${motivo}` : motivo;
+}
+
+function setOrderDay(order, key) {
+  order.dia = key;
+  order.diaLargo = schedule.formatDay(key);
+  order.diaCorto = schedule.formatShort(key);
+}
+
+function closedDayText(r) {
+  const why = r.reason === 'domingo' ? 'cerramos los domingos'
+    : r.reason === 'pasado' ? 'ese día ya ha pasado'
+    : r.reason === 'fuera de plazo' ? 'solo cogemos pedidos para los próximos 7 días de apertura'
+    : `estamos cerrados (${r.reason})`;
+  return `El ${schedule.formatDay(r.closed)} no puede ser: ${why}.`;
+}
+
+// ── Mensajes entrantes ───────────────────────────────────────────────────────
 client.on('message', async msg => {
-  if (msg.fromMe || msg.from.includes('@g.us') || msg.from.includes('@broadcast') || !msg.body?.trim()) return;
-  if (msg.body.length > 1500) return;
+  if (msg.fromMe || msg.from.includes('@g.us') || msg.from.includes('@broadcast') || msg.from === 'status@broadcast') return;
   if (processedMsgIds.has(msg.id._serialized)) return;
-  
   processedMsgIds.add(msg.id._serialized);
   if (processedMsgIds.size > 1000) processedMsgIds.clear();
 
   const senderId = msg.from;
-  const text     = msg.body.trim();
+  const sender = senderId.split('@')[0];
+  if (isInHandoff(sender)) return; // lo está atendiendo una persona
 
-  if (!userBuffers.has(senderId)) {
-    userBuffers.set(senderId, { texts: [], msgs: [], timer: null });
+  // Audios, fotos, ubicaciones... el bot no los entiende: pasan a una persona.
+  if (!msg.body?.trim()) {
+    if (msg.hasMedia || ['ptt', 'audio', 'image', 'video', 'document', 'location', 'vcard', 'sticker'].includes(msg.type)) {
+      await startHandoff(senderId, msg, `Mensaje no de texto (${msg.type})`, `[${msg.type}]`, MSG.relevo, 'multimedia');
+    }
+    return;
+  }
+  if (msg.body.length > 1500) {
+    await startHandoff(senderId, msg, 'Mensaje demasiado largo', msg.body.slice(0, 300) + '…', MSG.relevo, 'mensaje_largo');
+    return;
   }
 
+  if (!userBuffers.has(senderId)) userBuffers.set(senderId, { texts: [], msgs: [], timer: null });
   const buffer = userBuffers.get(senderId);
-  buffer.texts.push(text);
+  buffer.texts.push(msg.body.trim());
   buffer.msgs.push(msg);
-
   if (buffer.timer) clearTimeout(buffer.timer);
 
+  // Espera un poco por si el cliente manda el pedido en varios mensajes seguidos.
   buffer.timer = setTimeout(async () => {
-    const combinedText = buffer.texts.join('. ');
-    const lastMsg = buffer.msgs[buffer.msgs.length - 1];
     userBuffers.delete(senderId);
-
-    // ── GESTIÓN DE HORA PENDIENTE ──────────────────────────────────────────
-    if (pendingHourClients.has(senderId)) {
-      const item = pendingHourClients.get(senderId);
-      pendingHourClients.delete(senderId); // Lo extraemos de inmediato para evitar bloqueos
-
-      try {
-        let selectedTime = null;
-        const cleanText = combinedText.trim();
-
-        if (item.options && item.options[cleanText]) {
-          selectedTime = item.options[cleanText];
-        } else if (['4', 'sin hora', 'no sé', 'no lo sé', 'da igual'].some(kw => cleanText.toLowerCase().includes(kw))) {
-          selectedTime = null;
-        } else {
-          const extractedResponse = await extractTimeOnly(cleanText);
-          if (extractedResponse === 'ES_PREGUNTA') {
-            const resp = await extractOrder(cleanText);
-            if (resp?.tipo === 'chat' && resp.respuesta_chat) {
-               try { await lastMsg.reply(resp.respuesta_chat); } catch {}
-               pendingHourClients.set(senderId, item); // Devolvemos el estado al pendiente
-               return; 
-            } else {
-               try { await lastMsg.reply('Por favor, selecciona una opción del 1 al 4 o dime tu hora de recogida.'); } catch {}
-               pendingHourClients.set(senderId, item);
-               return;
-             }
-          }
-          selectedTime = (extractedResponse === 'SIN_HORA' || !extractedResponse) ? cleanText : extractedResponse;
-        }
-
-        const pendingOrder = item.order;
-        pendingOrder.hora = selectedTime;
-        await finalizeAndPrintOrder(pendingOrder, lastMsg);
-
-      } catch (error) {
-        log('ERROR', `SISTEMA IA (Hora): ${error.message}`);
-        // Fallback robusto: si la IA falla, guardamos el texto literal como hora para que el pedido no se pierda
-        const pendingOrder = item.order;
-        pendingOrder.hora = combinedText; 
-        await finalizeAndPrintOrder(pendingOrder, lastMsg);
-      }
-    } else {
-      // ── FLUJO GENERAL DE PEDIDOS Y CHAT ──────────────────────────────────
-      await processOrder(senderId, combinedText, lastMsg);
+    const text = buffer.texts.join('. ');
+    const lastMsg = buffer.msgs[buffer.msgs.length - 1];
+    try {
+      if (isInHandoff(sender)) return;
+      if (pendingDay.has(senderId)) await handleDayAnswer(senderId, text, lastMsg);
+      else await handleMessage(senderId, text, lastMsg);
+    } catch (e) {
+      log('ERROR', `Procesando mensaje de ${sender}: ${e.message}`);
+      logError({ origen: 'sistema', error: e, cliente: sender, mensaje: text });
+      await startHandoff(senderId, lastMsg, 'Error interno procesando el mensaje', text, MSG.relevo, 'error_interno');
     }
-  }, 1000);
+  }, 2500);
 });
 
-async function processOrder(senderId, text, msg) {
+async function reply(msg, text) {
+  try { await msg.reply(text); }
+  catch (e) { log('ERROR', `Reply WhatsApp: ${e.message}`); logError({ origen: 'whatsapp', error: e, cliente: msg.from?.split('@')[0] }); }
+}
+
+async function handleMessage(senderId, text, msg) {
   const sender = senderId.split('@')[0];
   log('MSG', `${sender}: "${text.substring(0, 60)}${text.length > 60 ? '…' : ''}"`);
-  
-  let responseObj;
+
+  let res;
   try {
-    responseObj = await extractOrder(text);
+    res = await classifyMessage(text);
   } catch (e) {
-    log('ERROR', `SISTEMA IA: ${e.message}`);
-    try { await msg.reply('⚠️ El asistente virtual está teniendo problemas temporales. Un trabajador confirmará tu mensaje pronto.'); } catch {}
+    log('ERROR', `IA: ${e.message}`);
+    logError({ origen: 'ia', error: e, cliente: sender, mensaje: text });
+    await startHandoff(senderId, msg, 'IA no disponible', text, MSG.relevo, 'ia_caida');
     return;
   }
+  if (res.invalid) logError({ origen: 'ia', error: 'Respuesta de la IA con formato no válido', cliente: sender, mensaje: text });
 
-  if (responseObj?.tipo === 'chat' && responseObj.respuesta_chat) {
-    try { await msg.reply(responseObj.respuesta_chat); } catch {}
-    return; 
+  switch (res.tipo) {
+    case 'saludo':         return reply(msg, MSG.saludo);
+    case 'agradecimiento': return reply(msg, MSG.agradecimiento);
+    case 'horario':        return reply(msg, schedule.hoursReply());
+    case 'carta': {
+      const menu = catalog.menuMessage();
+      if (menu) return reply(msg, menu);
+      logError({ origen: 'sistema', error: 'productos.json falta o está vacío', cliente: sender });
+      return startHandoff(senderId, msg, 'Pide la carta y productos.json no está disponible', text);
+    }
+    case 'pedido':         return startOrder(senderId, res, text, msg);
+    default:               return startHandoff(senderId, msg, res.motivo || 'La IA no sabe responder', text);
   }
+}
 
-  const order = responseObj?.pedido;
-  if (!order?.articulos?.length) {
-    try { await msg.reply('¡Hola! Soy el asistente virtual de la Carnicería Raúl Oliver. ¿En qué puedo ayudarte hoy o qué te gustaría pedir?'); } catch {}
-    return;
-  }
-
-  const pin    = genPin();
-  const id     = `${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-  const record = {
-    id, pin,
-    cliente:    order.cliente  ?? 'Cliente',
-    hora:       order.hora     ?? null,
-    articulos:  order.articulos,
-    createdAt:  new Date().toISOString(),
-    status:     'pending',
+async function startOrder(senderId, res, text, msg) {
+  const sender = senderId.split('@')[0];
+  const order = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    pin: genPin(orders),
+    cliente: res.pedido.cliente ?? 'Cliente',
+    dia: null, diaLargo: null, diaCorto: null,
+    articulos: res.pedido.articulos,
+    revisar: false, motivoRevision: null,
+    mensajeOriginal: text,
+    createdAt: new Date().toISOString(),
+    status: 'pending',
     printError: null,
     sender,
   };
+  // El registro en fallos_bot.jsonl lo hace startHandoff al finalizar el pedido.
+  if (res.revisar) markForReview(order, res.motivo || 'Revisar pedido');
 
-  if (!record.hora || String(record.hora).toLowerCase() === 'null' || record.hora === 'no sé' || String(record.hora).toLowerCase() === 'sin_hora') {
-    const options = {
-      '1': 'Mañana (09:30 - 11:00)',
-      '2': 'Mediodía (12:00 - 13:30)',
-      '3': 'Tarde (18:00 - 20:00)',
-      '4': 'Sin hora fija'
-    };
-
-    pendingHourClients.set(senderId, { order: record, options });
-
-    try {
-      await msg.reply(
-        `🕒 ¿A qué hora te gustaría pasar a recoger tu pedido?\n\n` +
-        `*Responde con el número de opción:* \n` +
-        `1️⃣ Mañana (09:30 - 11:00)\n` +
-        `2️⃣ Mediodía (12:00 - 13:30)\n` +
-        `3️⃣ Tarde (18:00 - 20:00)\n` +
-        `4️⃣ Sin hora fija\n\n` +
-        `_(O escribe directamente tu hora exacta, ej: 18:00)_`
-      );
-    } catch {}
-    return;
+  const days = schedule.getPickupDays(7);
+  let prefix = '';
+  // Si ya dijo el día en el propio pedido ("para el lunes"), no se le pregunta.
+  if (res.pedido.dia_texto) {
+    const r = schedule.parseDayAnswer(res.pedido.dia_texto, days, new Date(), { allowOptionNumber: false });
+    if (r?.key) {
+      setOrderDay(order, r.key);
+      return finalizeAndPrintOrder(order, msg, senderId);
+    }
+    if (r?.closed) prefix = closedDayText(r) + '\n\n';
   }
 
-  await finalizeAndPrintOrder(record, msg);
+  setPendingDay(senderId, { order, days, attempts: 0, msg });
+  await reply(msg, prefix + schedule.pickupDaysMessage(days));
 }
 
-async function finalizeAndPrintOrder(record, msg) {
+async function handleDayAnswer(senderId, text, msg) {
+  const item = pendingDay.get(senderId);
+  item.msg = msg;
+  const r = schedule.parseDayAnswer(text, item.days);
+
+  if (r?.key) {
+    cancelPendingDay(senderId);
+    setOrderDay(item.order, r.key);
+    return finalizeAndPrintOrder(item.order, msg, senderId);
+  }
+
+  if (!r) {
+    // Puede que entre medias pregunte otra cosa (p. ej. el horario).
+    let res = null;
+    try { res = await classifyMessage(text); } catch (e) { logError({ origen: 'ia', error: e, cliente: item.order.sender, mensaje: text }); }
+    if (res?.tipo === 'horario' || (res?.tipo === 'carta' && catalog.menuMessage())) {
+      await reply(msg, res.tipo === 'horario' ? schedule.hoursReply() : catalog.menuMessage());
+      return reply(msg, schedule.pickupDaysMessage(item.days));
+    }
+    if (res?.tipo === 'relevo') {
+      // Pregunta que el bot no sabe contestar: se registra el pedido sin día y pasa a una persona.
+      cancelPendingDay(senderId);
+      markForReview(item.order, 'Falta confirmar el día de recogida');
+      await finalizeAndPrintOrder(item.order, msg, senderId, { handoffMotivo: res.motivo || 'Pregunta durante la elección de día', handoffTexto: text, categoria: 'consulta' });
+      return;
+    }
+  }
+
+  item.attempts++;
+  if (item.attempts >= MAX_DAY_ATTEMPTS) {
+    cancelPendingDay(senderId);
+    markForReview(item.order, 'No se entendió el día de recogida');
+    await finalizeAndPrintOrder(item.order, msg, senderId, { handoffMotivo: 'No se entendió el día de recogida', handoffTexto: text, categoria: 'dia_no_entendido' });
+    return;
+  }
+  const head = r?.closed ? closedDayText(r) : MSG.diaNoEntendido;
+  await reply(msg, `${head}\n\n${schedule.pickupDaysMessage(item.days)}`);
+}
+
+async function finalizeAndPrintOrder(record, msg, senderId, { handoffMotivo, handoffTexto, categoria = 'pedido_dudoso' } = {}) {
   orders.set(record.id, record);
   saveOrders(orders);
   broadcast('new_order', record);
@@ -354,15 +538,21 @@ async function finalizeAndPrintOrder(record, msg) {
     await printTicket(record, record.pin);
   } catch (err) {
     log('ERROR', `Impresora: ${err.message}`);
+    logError({ origen: 'impresora', error: err, cliente: record.sender });
     record.printError = { message: err.message, timestamp: new Date().toISOString(), retries: 0 };
     saveOrders(orders); broadcast('order_updated', record);
   }
 
-  try {
-    const lista = record.articulos.map(a => `• ${a.cantidad} ${a.producto}`).join('\n');
-    const horaTexto = record.hora ? `\nHora de recogida: *${record.hora}*` : '';
-    await msg.reply(`✅ ¡Pedido recibido!\n\n${lista}${horaTexto}\n\nCódigo de recogida: *${record.pin}*\nIndícalo al llegar al mostrador.`);
-  } catch (e) { log('ERROR', `Reply WhatsApp: ${e.message}`); }
+  const lista = record.articulos.map(a => `• ${a.cantidad ? a.cantidad + ' ' : ''}${a.producto}`).join('\n');
+  const diaTexto = record.dia ? `\n\n📅 Recogida: *${record.diaLargo}*` : '';
+  let texto = `✅ ¡Pedido recibido!\n\n${lista}${diaTexto}\n\nCódigo de recogida: *${record.pin}*\nIndícalo al llegar al mostrador.`;
+  if (record.revisar) texto += `\n\n${MSG.relevoPedido}`;
+  await reply(msg, texto);
+
+  // Un pedido marcado para revisar siempre implica que una persona contacte con el cliente.
+  if (record.revisar) {
+    await startHandoff(senderId, msg, handoffMotivo || record.motivoRevision || 'Pedido para revisar', handoffTexto || record.mensajeOriginal, null, categoria);
+  }
 }
 
 process.on('SIGINT', async () => {
@@ -371,5 +561,12 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
+process.on('unhandledRejection', err => {
+  log('ERROR', `Promesa no controlada: ${err?.message ?? err}`);
+  logError({ origen: 'sistema', error: err });
+});
+
 log('BOOT', `Iniciando ${SHOP_NAME}...`);
+const festivosWarn = schedule.missingLocalHolidaysWarning();
+if (festivosWarn) log('WARN', festivosWarn);
 client.initialize();

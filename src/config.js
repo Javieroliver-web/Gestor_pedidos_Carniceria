@@ -9,6 +9,9 @@ const {
   PRINTER_INTERFACE = 'Brother TD-4000',
   SHOP_NAME         = 'CARNICERÍA RAÚL OLIVER',
   PORT              = '3000',
+  HOST              = '127.0.0.1',
+  GROQ_MODEL        = 'openai/gpt-oss-120b',
+  GEMINI_MODEL      = 'gemini-2.5-flash',
 } = process.env;
 
 if (!GROQ_API_KEY) {
@@ -62,13 +65,19 @@ function getPrinterName(iface) {
   return (iface || '').replace(/^printer:/i, '').trim();
 }
 
-function genPin() {
-  const chars = '0123456789';
-  return [...Array(4)].map(() => chars[Math.floor(Math.random() * chars.length)]).join('');
+// PIN de 4 cifras que no choque con ningún pedido activo (pending/ready).
+function genPin(ordersMap) {
+  const inUse = new Set();
+  if (ordersMap) for (const o of ordersMap.values()) if (['pending', 'ready'].includes(o.status)) inUse.add(o.pin);
+  for (let i = 0; i < 50; i++) {
+    const pin = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
+    if (!inUse.has(pin)) return pin;
+  }
+  return String(Math.floor(Math.random() * 10000)).padStart(4, '0');
 }
 
 module.exports = {
-  GROQ_API_KEY, GEMINI_API_KEY, SHOP_NAME, PORT, log,
+  GROQ_API_KEY, GEMINI_API_KEY, GROQ_MODEL, GEMINI_MODEL, SHOP_NAME, PORT, HOST, log,
   loadConfig, saveConfig, loadOrders, saveOrders,
   getPrinterName, genPin,
   getCurrentPrinter: () => currentPrinter,

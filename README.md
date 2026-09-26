@@ -7,6 +7,10 @@ Un sistema completo de punto de venta (POS) y recepción de pedidos automatizado
 - **Panel Web en Tiempo Real:** Interfaz frontend (Dashboard) sincronizada mediante Server-Sent Events (SSE).
 - **Gestión Avanzada de Hardware:** Motor de impresión dual con patrón estrategia. Imprime a bajo nivel en .NET para etiquetas cuadradas térmicas (Ej: Brother TD-4000) o mediante `notepad /pt` para tickets en A4 (Ej: Brother HL-1210W).
 - **Control de WhatsApp desde UI:** Modal integrado para ver el estado del socket, reiniciar el servicio o solicitar un nuevo código QR sin tocar la consola.
+- **Día de recogida:** tras el pedido, el cliente elige entre los 7 próximos días de apertura (sin domingos ni festivos de `festivos.json`).
+- **La IA no redacta respuestas:** solo clasifica (saludo, horario, carta, pedido o relevo). Todos los textos al cliente son plantillas fijas; el horario sale de `src/schedule.js` y la carta de `productos.json`.
+- **Relevo a persona:** si el bot no sabe responder, avisa al cliente y deja de contestarle hasta medianoche (o hasta pulsar "Devolver al bot" en el panel). Los pedidos dudosos se registran marcados como *Revisar*.
+- **Registros:** `logs/fallos_bot.jsonl` (warnings: mensajes que el bot no resolvió) y `logs/errores.jsonl` (errores técnicos), visibles en el panel en *Incidencias* e *Información para desarrolladores*.
 
 ---
 
@@ -20,10 +24,19 @@ Gestor_pedidos_Carniceria/
 ├── ecosystem.config.js   ← Configuración de despliegue para PM2
 ├── .env                  ← Variables de entorno (crear a partir de .env.example)
 ├── .env.example          ← Plantilla de configuración
+├── festivos.json         ← Festivos y cierres (editable sin reiniciar)
+├── productos.json        ← Carta de elaborados (editable sin reiniciar)
+├── src/
+│   ├── config.js         ← Variables de entorno y persistencia
+│   ├── schedule.js       ← Horario, días de recogida y respuestas de horario
+│   ├── catalog.js        ← Carta de productos
+│   └── services/         ← IA, impresión y registros de incidencias
 │
 │   (Se generan automáticamente en ejecución)
 ├── orders.json           ← Base de datos JSON de pedidos persistidos
 ├── config.json           ← Memoria de impresoras y perfiles de papel
+├── handoffs.json         ← Clientes pasados a una persona (hasta medianoche)
+├── logs/                 ← fallos_bot.jsonl y errores.jsonl
 ├── .wwebjs_auth/         ← Sesión encriptada de WhatsApp Web
 └── node_modules/         ← Dependencias
 ```
@@ -105,6 +118,12 @@ Cliente (WhatsApp)
 
 ---
 
+## Mantenimiento anual
+- **Festivos:** los festivos locales de Lora del Río se publican en el BOJA hacia octubre. Añádelos a `festivos.json`; el panel de desarrolladores avisa si faltan los del año en curso.
+- **Vacaciones o cierres puntuales:** añádelos en `cierres` dentro de `festivos.json`.
+
+---
+
 ## Mantenimiento y Comandos Útiles
 Si necesitas gestionar el servicio en segundo plano, abre PowerShell:
 ```powershell
@@ -117,4 +136,4 @@ pm2 restart carniceria-bot  # Reiniciar el sistema
 
 ## Autor
 Desarrollado por **Francisco Javier Párraga Oliver**  
-*Backend Software Developer*
+*Full-Stack Software Developer*
