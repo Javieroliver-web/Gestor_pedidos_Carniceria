@@ -30,10 +30,19 @@ function readGroqLimits(headers) {
   const limTok = num('x-ratelimit-limit-tokens'), remTok = num('x-ratelimit-remaining-tokens');
   if (limReq == null && limTok == null) return null;
   const pct = (rem, lim) => (lim ? Math.round((rem / lim) * 1000) / 10 : null);
+  // Groq da el reinicio como duración ("2h14m3.5s", "7.1s"): se convierte a una fecha
+  // absoluta para que el panel pueda hacer la cuenta atrás en tiempo real.
+  const resetAt = v => {
+    if (!v) return null;
+    const m = String(v).match(/^(?:(\d+)h)?(?:(\d+)m(?!s))?(?:([\d.]+)s)?(?:([\d.]+)ms)?$/);
+    if (!m) return null;
+    const ms = ((+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0)) * 1000 + (+m[4] || 0);
+    return new Date(Date.now() + ms).toISOString();
+  };
   return {
     actualizado: new Date().toISOString(),
-    peticionesDia: { limite: limReq, restantes: remReq, restantePct: pct(remReq, limReq), reinicio: headers.get('x-ratelimit-reset-requests') },
-    tokensMinuto: { limite: limTok, restantes: remTok, restantePct: pct(remTok, limTok), reinicio: headers.get('x-ratelimit-reset-tokens') },
+    peticionesDia: { limite: limReq, restantes: remReq, restantePct: pct(remReq, limReq), reinicio: headers.get('x-ratelimit-reset-requests'), reinicioEn: resetAt(headers.get('x-ratelimit-reset-requests')) },
+    tokensMinuto: { limite: limTok, restantes: remTok, restantePct: pct(remTok, limTok), reinicio: headers.get('x-ratelimit-reset-tokens'), reinicioEn: resetAt(headers.get('x-ratelimit-reset-tokens')) },
   };
 }
 

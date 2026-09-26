@@ -15,6 +15,7 @@ node_modules/
 orders.json
 config.json
 handoffs.json
+pending.json
 
 # ── Archivos Temporales de Impresión ────────────────────────────────────
 # Ignoramos todos los tickets generados para el Bloc de notas / PowerShell

@@ -9,6 +9,7 @@ const {
   SHOP_NAME, PORT, HOST, log,
   loadOrders, saveOrders,
   getCurrentPrinter, getProfiles, savePrinterConfig,
+  isPrintingEnabled, setPrintingEnabled, getPrintingChangedAt,
   genPin, getPrinterName
 } = require('./src/config');
 
@@ -52,7 +53,7 @@ setInterval(cleanupOldOrders, 6 * 60 * 60 * 1000);
 
 // ── Relevo a persona: el bot deja de contestar a ese cliente hasta medianoche ─
 const HANDOFFS_FILE = path.join(__dirname, 'handoffs.json');
-const handoffs = new Map(); // sender -> { sender, desde, hasta, motivo, mensaje }
+const handoffs = new Map(); // clave cliente -> { sender, telefono, desde, hasta, motivo, mensaje }
 
 (function loadHandoffs() {
   try {
@@ -82,16 +83,15 @@ function isInHandoff(sender) {
 }
 
 /** Pasa el cliente a una persona. Si replyText es null no se envía nada al cliente. */
-async function startHandoff(senderId, msg, motivo, texto, replyText = MSG.relevo, categoria = 'consulta') {
-  const sender = senderId.split('@')[0];
-  const h = { sender, desde: new Date().toISOString(), hasta: schedule.nextMidnight().toISOString(), motivo, categoria, mensaje: texto };
-  handoffs.set(sender, h);
+async function startHandoff(who, target, motivo, texto, replyText = MSG.relevo, categoria = 'consulta') {
+  const h = { sender: who.key, telefono: who.phone, desde: new Date().toISOString(), hasta: schedule.nextMidnight().toISOString(), motivo, categoria, mensaje: texto };
+  handoffs.set(who.key, h);
   saveHandoffs();
-  cancelPendingDay(senderId);
+  cancelPendingDay(who.key);
   broadcast('handoffs', [...handoffs.values()]);
-  logFallo({ categoria, motivo, cliente: sender, mensaje: texto });
-  log('RELEVO', `${sender}: ${motivo}`);
-  if (replyText) { try { await msg.reply(replyText); } catch (e) { logError({ origen: 'whatsapp', error: e, cliente: sender }); } }
+  logFallo({ categoria, motivo, cliente: who.phone, mensaje: texto });
+  log('RELEVO', `${who.phone}: ${motivo}`);
+  if (replyText) await reply(target, replyText, who);
 }
 
 // ── SSE ───────────────────────────────────────────────────────────────────────
@@ -124,6 +124,7 @@ app.get('/events', (req, res) => {
     waState:  waState,
     waQrUrl:  waQrUrl,
     handoffs: activeHandoffs(),
+    printing: { enabled: isPrintingEnabled(), changedAt: getPrintingChangedAt() },
   });
 
   const hb = setInterval(() => res.write(':\n\n'), 15000);
@@ -175,8 +176,9 @@ app.post('/api/orders/:id/retry-print', async (req, res) => {
   const o = orders.get(req.params.id);
   if (!o) return res.status(404).json({ error: 'No encontrado' });
   try {
-    await printTicket(o, o.pin);
+    await printTicket(o, o.pin);  // la reimpresión manual funciona aunque la automática esté apagada
     o.printError = null;
+    o.printSkipped = false;
     saveOrders(orders); broadcast('order_updated', o);
     log('PRINT', `Reimpresión ${o.pin} OK`);
     res.json({ ok: true, order: o });
@@ -219,15 +221,28 @@ app.get('/api/dev', (_req, res) => {
       esperandoDia: pendingDay.size,
     },
     relevosActivos: activeHandoffs().length,
+    impresionActiva: isPrintingEnabled(),
     productosEnCarta: catalog.productCount(),
     festivos: schedule.missingLocalHolidaysWarning(),
     sistema: {
       uptimeSeg: Math.round((Date.now() - BOOT_TIME) / 1000),
+      arranque: new Date(BOOT_TIME).toISOString(),
+      ahora: new Date().toISOString(),
       memoriaMB: Math.round(process.memoryUsage().rss / 1048576),
       node: process.version,
       host: HOST, puerto: Number(PORT),
     },
   });
+});
+
+// Activar o desactivar la impresión automática de tickets
+app.post('/api/printing', (req, res) => {
+  if (typeof req.body?.enabled !== 'boolean') return res.status(400).json({ error: 'enabled debe ser true o false' });
+  setPrintingEnabled(req.body.enabled);
+  const state = { enabled: isPrintingEnabled(), changedAt: getPrintingChangedAt() };
+  broadcast('printing', state);
+  log('WEB', `Impresión automática → ${state.enabled ? 'ACTIVADA' : 'DESACTIVADA'}`);
+  res.json(state);
 });
 
 app.get('/api/printer', (_req, res) => res.json({ interface: getCurrentPrinter(), profile: getProfiles()[getCurrentPrinter()] }));
@@ -324,7 +339,11 @@ client.on('qr', qr => {
 });
 
 client.on('loading_screen', pct => { waState = 'STARTING'; broadcastWaState(); log('WA', `Cargando... ${pct}%`); });
-client.on('ready', () => { waState = 'CONNECTED'; waQrUrl = ''; broadcastWaState(); log('OK', `WhatsApp conectado — ${SHOP_NAME}`); });
+client.on('ready', () => {
+  waState = 'CONNECTED'; waQrUrl = ''; broadcastWaState(); log('OK', `WhatsApp conectado — ${SHOP_NAME}`);
+  if (!restoredPending) { restoredPending = true; restorePending(); }
+});
+let restoredPending = false;
 client.on('auth_failure', msg => { waState = 'ERROR'; broadcastWaState(); log('ERROR', `Auth: ${msg}`); logError({ origen: 'whatsapp', error: `auth_failure: ${msg}` }); process.exit(1); });
 client.on('disconnected', why => { waState = 'ERROR'; broadcastWaState(); log('WARN', `Desconectado (${why}). Reiniciando...`); logError({ origen: 'whatsapp', error: `disconnected: ${why}` }); process.exit(1); });
 
@@ -332,28 +351,54 @@ const processedMsgIds = new Set();
 const userBuffers = new Map();
 
 // ── Elección de día pendiente ────────────────────────────────────────────────
-// sender -> { order, days, attempts, expiry, msg }
+// clave cliente -> { who, chatId, order, days, attempts, since, expiry, target }
+// Se guarda en disco para que un reinicio del bot no deje la conversación a medias.
+const PENDING_FILE = path.join(__dirname, 'pending.json');
 const pendingDay = new Map();
 const PENDING_DAY_TTL_MS = 10 * 60 * 1000;
 const MAX_DAY_ATTEMPTS = 2;
 
-function cancelPendingDay(senderId) {
-  const item = pendingDay.get(senderId);
-  if (item) { clearTimeout(item.expiry); pendingDay.delete(senderId); }
+function savePending() {
+  try {
+    const data = [...pendingDay.values()].map(({ who, chatId, order, days, attempts, since }) => ({ who, chatId, order, days, attempts, since }));
+    fs.writeFileSync(PENDING_FILE, JSON.stringify(data, null, 2));
+  } catch (e) { log('ERROR', `No se pudo guardar pending.json: ${e.message}`); }
+}
+
+function cancelPendingDay(key) {
+  const item = pendingDay.get(key);
+  if (item) { clearTimeout(item.expiry); pendingDay.delete(key); savePending(); }
   return item;
 }
 
 // Si el cliente no elige día, el pedido no se pierde: se registra marcado para revisar.
-function setPendingDay(senderId, item) {
-  cancelPendingDay(senderId);
+function setPendingDay(key, item, ttl = PENDING_DAY_TTL_MS) {
+  const prev = pendingDay.get(key);
+  if (prev && prev !== item) clearTimeout(prev.expiry);
+  if (item.expiry) clearTimeout(item.expiry);
+  item.since = item.since || Date.now();
   item.expiry = setTimeout(async () => {
-    if (pendingDay.get(senderId) !== item) return;
-    pendingDay.delete(senderId);
-    log('WARN', `${senderId.split('@')[0]} no eligió día; pedido registrado para revisar.`);
+    if (pendingDay.get(key) !== item) return;
+    cancelPendingDay(key);
+    log('WARN', `${item.who.phone} no eligió día; pedido registrado para revisar.`);
     markForReview(item.order, 'El cliente no eligió día de recogida');
-    await finalizeAndPrintOrder(item.order, item.msg, senderId, { categoria: 'sin_respuesta_dia' });
-  }, PENDING_DAY_TTL_MS);
-  pendingDay.set(senderId, item);
+    await finalizeAndPrintOrder(item.order, item.target || { chatId: item.chatId }, item.who, { categoria: 'sin_respuesta_dia' });
+  }, Math.max(ttl, 1000));
+  pendingDay.set(key, item);
+  savePending();
+}
+
+// Al arrancar, recupera los pedidos que esperaban día antes del reinicio.
+function restorePending() {
+  let data = [];
+  try { if (fs.existsSync(PENDING_FILE)) data = JSON.parse(fs.readFileSync(PENDING_FILE, 'utf8')); }
+  catch (e) { log('WARN', `pending.json: ${e.message}`); }
+  for (const it of data) {
+    if (!it?.who?.key || pendingDay.has(it.who.key)) continue;
+    const left = PENDING_DAY_TTL_MS - (Date.now() - (it.since || 0));
+    setPendingDay(it.who.key, { ...it, target: { chatId: it.chatId } }, left);
+  }
+  if (data.length) log('SYS', `${data.length} pedido(s) esperando día recuperados tras el reinicio.`);
 }
 
 function markForReview(order, motivo) {
@@ -376,88 +421,130 @@ function closedDayText(r) {
 }
 
 // ── Mensajes entrantes ───────────────────────────────────────────────────────
+function withTimeout(promise, ms, label) {
+  let t;
+  return Promise.race([promise, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`${label}: sin respuesta en ${ms / 1000}s`)), ms); })])
+    .finally(() => clearTimeout(t));
+}
+
+// WhatsApp puede identificar al cliente con su número (…@c.us) o con un id interno (…@lid).
+// Se usa el número real siempre que se pueda, para que los mensajes de una misma
+// persona se reconozcan como la misma conversación y el panel muestre su teléfono.
+const lidToPhone = new Map();
+async function identify(msg) {
+  const chatId = msg.from;
+  const raw = chatId.split('@')[0];
+  let phone = chatId.endsWith('@c.us') ? raw : lidToPhone.get(raw);
+  if (!phone) {
+    try {
+      const contact = await withTimeout(msg.getContact(), 4000, 'getContact');
+      const n = String(contact?.number || '').replace(/\D/g, '');
+      if (n && n !== raw) phone = n;
+    } catch (e) { log('WARN', `No se pudo obtener el teléfono de ${raw}: ${e.message}`); }
+    if (phone) lidToPhone.set(raw, phone);
+  }
+  return { key: phone || raw, phone: phone || raw, chatId };
+}
+
+/** Envía un texto. target es el mensaje al que se responde o { chatId } si no hay mensaje (tras un reinicio). */
+async function reply(target, text, who) {
+  const chatId = target?.from || target?.chatId;
+  const to = who?.phone || String(chatId || '').split('@')[0];
+  try {
+    if (typeof target?.reply === 'function') await withTimeout(target.reply(text), 20000, 'reply');
+    else await withTimeout(client.sendMessage(chatId, text), 20000, 'sendMessage');
+    log('OUT', `${to}: "${text.split('\n')[0].slice(0, 60)}"`);
+    return true;
+  } catch (e) {
+    // Segundo intento sin citar el mensaje: a veces reply() falla y sendMessage() no.
+    try {
+      await withTimeout(client.sendMessage(chatId, text), 20000, 'sendMessage');
+      log('OUT', `${to}: "${text.split('\n')[0].slice(0, 60)}" (reintento)`);
+      return true;
+    } catch (e2) {
+      log('ERROR', `No se pudo enviar a ${to}: ${e2.message}`);
+      logError({ origen: 'whatsapp', error: e2, cliente: to, mensaje: text.slice(0, 200) });
+      return false;
+    }
+  }
+}
+
 client.on('message', async msg => {
   if (msg.fromMe || msg.from.includes('@g.us') || msg.from.includes('@broadcast') || msg.from === 'status@broadcast') return;
   if (processedMsgIds.has(msg.id._serialized)) return;
   processedMsgIds.add(msg.id._serialized);
   if (processedMsgIds.size > 1000) processedMsgIds.clear();
 
-  const senderId = msg.from;
-  const sender = senderId.split('@')[0];
-  if (isInHandoff(sender)) return; // lo está atendiendo una persona
+  const who = await identify(msg);
+  const body = msg.body?.trim() || '';
+  log('IN', `${who.phone}${who.phone !== msg.from.split('@')[0] ? ` (${msg.from})` : ''} [${msg.type}] "${body.slice(0, 60)}"${pendingDay.has(who.key) ? ' · esperando día' : ''}${isInHandoff(who.key) ? ' · en relevo, no se responde' : ''}`);
+  if (isInHandoff(who.key)) return; // lo está atendiendo una persona
 
   // Audios, fotos, ubicaciones... el bot no los entiende: pasan a una persona.
-  if (!msg.body?.trim()) {
+  if (!body) {
     if (msg.hasMedia || ['ptt', 'audio', 'image', 'video', 'document', 'location', 'vcard', 'sticker'].includes(msg.type)) {
-      await startHandoff(senderId, msg, `Mensaje no de texto (${msg.type})`, `[${msg.type}]`, MSG.relevo, 'multimedia');
+      await startHandoff(who, msg, `Mensaje no de texto (${msg.type})`, `[${msg.type}]`, MSG.relevo, 'multimedia');
     }
-    return;
+    return; // reacciones, avisos de cifrado, etc.: no son mensajes del cliente
   }
-  if (msg.body.length > 1500) {
-    await startHandoff(senderId, msg, 'Mensaje demasiado largo', msg.body.slice(0, 300) + '…', MSG.relevo, 'mensaje_largo');
+  if (body.length > 1500) {
+    await startHandoff(who, msg, 'Mensaje demasiado largo', body.slice(0, 300) + '…', MSG.relevo, 'mensaje_largo');
     return;
   }
 
-  if (!userBuffers.has(senderId)) userBuffers.set(senderId, { texts: [], msgs: [], timer: null });
-  const buffer = userBuffers.get(senderId);
-  buffer.texts.push(msg.body.trim());
+  if (!userBuffers.has(who.key)) userBuffers.set(who.key, { texts: [], msgs: [], timer: null });
+  const buffer = userBuffers.get(who.key);
+  buffer.texts.push(body);
   buffer.msgs.push(msg);
   if (buffer.timer) clearTimeout(buffer.timer);
 
   // Espera un poco por si el cliente manda el pedido en varios mensajes seguidos.
   buffer.timer = setTimeout(async () => {
-    userBuffers.delete(senderId);
+    userBuffers.delete(who.key);
     const text = buffer.texts.join('. ');
     const lastMsg = buffer.msgs[buffer.msgs.length - 1];
     try {
-      if (isInHandoff(sender)) return;
-      if (pendingDay.has(senderId)) await handleDayAnswer(senderId, text, lastMsg);
-      else await handleMessage(senderId, text, lastMsg);
+      if (isInHandoff(who.key)) return;
+      if (pendingDay.has(who.key)) await handleDayAnswer(who, text, lastMsg);
+      else await handleMessage(who, text, lastMsg);
     } catch (e) {
-      log('ERROR', `Procesando mensaje de ${sender}: ${e.message}`);
-      logError({ origen: 'sistema', error: e, cliente: sender, mensaje: text });
-      await startHandoff(senderId, lastMsg, 'Error interno procesando el mensaje', text, MSG.relevo, 'error_interno');
+      // Nunca se deja al cliente sin respuesta: si algo falla, pasa a una persona.
+      log('ERROR', `Procesando mensaje de ${who.phone}: ${e.message}`);
+      logError({ origen: 'sistema', error: e, cliente: who.phone, mensaje: text });
+      await startHandoff(who, lastMsg, 'Error interno procesando el mensaje', text, MSG.relevo, 'error_interno');
     }
   }, 2500);
 });
 
-async function reply(msg, text) {
-  try { await msg.reply(text); }
-  catch (e) { log('ERROR', `Reply WhatsApp: ${e.message}`); logError({ origen: 'whatsapp', error: e, cliente: msg.from?.split('@')[0] }); }
-}
-
-async function handleMessage(senderId, text, msg) {
-  const sender = senderId.split('@')[0];
-  log('MSG', `${sender}: "${text.substring(0, 60)}${text.length > 60 ? '…' : ''}"`);
-
+async function handleMessage(who, text, msg) {
   let res;
   try {
     res = await classifyMessage(text);
   } catch (e) {
     log('ERROR', `IA: ${e.message}`);
-    logError({ origen: 'ia', error: e, cliente: sender, mensaje: text });
-    await startHandoff(senderId, msg, 'IA no disponible', text, MSG.relevo, 'ia_caida');
+    logError({ origen: 'ia', error: e, cliente: who.phone, mensaje: text });
+    await startHandoff(who, msg, 'IA no disponible', text, MSG.relevo, 'ia_caida');
     return;
   }
-  if (res.invalid) logError({ origen: 'ia', error: 'Respuesta de la IA con formato no válido', cliente: sender, mensaje: text });
+  if (res.invalid) logError({ origen: 'ia', error: 'Respuesta de la IA con formato no válido', cliente: who.phone, mensaje: text });
+  log('IA', `${who.phone} → ${res.tipo}${res.motivo ? ` (${res.motivo})` : ''}`);
 
   switch (res.tipo) {
-    case 'saludo':         return reply(msg, MSG.saludo);
-    case 'agradecimiento': return reply(msg, MSG.agradecimiento);
-    case 'horario':        return reply(msg, schedule.hoursReply());
+    case 'saludo':         return reply(msg, MSG.saludo, who);
+    case 'agradecimiento': return reply(msg, MSG.agradecimiento, who);
+    case 'horario':        return reply(msg, schedule.hoursReply(), who);
     case 'carta': {
       const menu = catalog.menuMessage();
-      if (menu) return reply(msg, menu);
-      logError({ origen: 'sistema', error: 'productos.json falta o está vacío', cliente: sender });
-      return startHandoff(senderId, msg, 'Pide la carta y productos.json no está disponible', text);
+      if (menu) return reply(msg, menu, who);
+      logError({ origen: 'sistema', error: 'productos.json falta o está vacío', cliente: who.phone });
+      return startHandoff(who, msg, 'Pide la carta y productos.json no está disponible', text);
     }
-    case 'pedido':         return startOrder(senderId, res, text, msg);
-    default:               return startHandoff(senderId, msg, res.motivo || 'La IA no sabe responder', text);
+    case 'pedido':         return startOrder(who, res, text, msg);
+    default:               return startHandoff(who, msg, res.motivo || 'La IA no sabe responder', text);
   }
 }
 
-async function startOrder(senderId, res, text, msg) {
-  const sender = senderId.split('@')[0];
+async function startOrder(who, res, text, msg) {
   const order = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     pin: genPin(orders),
@@ -469,7 +556,7 @@ async function startOrder(senderId, res, text, msg) {
     createdAt: new Date().toISOString(),
     status: 'pending',
     printError: null,
-    sender,
+    sender: who.phone,
   };
   // El registro en fallos_bot.jsonl lo hace startHandoff al finalizar el pedido.
   if (res.revisar) markForReview(order, res.motivo || 'Revisar pedido');
@@ -481,77 +568,132 @@ async function startOrder(senderId, res, text, msg) {
     const r = schedule.parseDayAnswer(res.pedido.dia_texto, days, new Date(), { allowOptionNumber: false });
     if (r?.key) {
       setOrderDay(order, r.key);
-      return finalizeAndPrintOrder(order, msg, senderId);
+      return finalizeAndPrintOrder(order, msg, who);
     }
     if (r?.closed) prefix = closedDayText(r) + '\n\n';
   }
 
-  setPendingDay(senderId, { order, days, attempts: 0, msg });
-  await reply(msg, prefix + schedule.pickupDaysMessage(days));
+  setPendingDay(who.key, { who, chatId: msg.from, order, days, attempts: 0, target: msg });
+  log('DIA', `${who.phone}: pedido a la espera de elegir día`);
+  await reply(msg, prefix + schedule.pickupDaysMessage(days), who);
 }
 
-async function handleDayAnswer(senderId, text, msg) {
-  const item = pendingDay.get(senderId);
-  item.msg = msg;
-  const r = schedule.parseDayAnswer(text, item.days);
+async function handleDayAnswer(who, text, msg) {
+  const item = pendingDay.get(who.key);
+  item.target = msg;
+  item.chatId = msg.from;
+  const again = () => schedule.pickupDaysMessage(item.days);
+
+  // Solo se toma directamente como día si el mensaje no trae nada más.
+  // "También quiero 1 de albóndigas" pasa por la IA aunque contenga un número.
+  const pure = schedule.isPureDayAnswer(text);
+  let r = pure ? schedule.parseDayAnswer(text, item.days) : null;
 
   if (r?.key) {
-    cancelPendingDay(senderId);
+    cancelPendingDay(who.key);
     setOrderDay(item.order, r.key);
-    return finalizeAndPrintOrder(item.order, msg, senderId);
+    log('DIA', `${who.phone}: "${text}" → ${item.order.diaLargo}`);
+    return finalizeAndPrintOrder(item.order, msg, who);
   }
 
   if (!r) {
-    // Puede que entre medias pregunte otra cosa (p. ej. el horario).
+    // El cliente puede escribir otra cosa mientras elige día: se le responde y se sigue esperando el día.
     let res = null;
-    try { res = await classifyMessage(text); } catch (e) { logError({ origen: 'ia', error: e, cliente: item.order.sender, mensaje: text }); }
-    if (res?.tipo === 'horario' || (res?.tipo === 'carta' && catalog.menuMessage())) {
-      await reply(msg, res.tipo === 'horario' ? schedule.hoursReply() : catalog.menuMessage());
-      return reply(msg, schedule.pickupDaysMessage(item.days));
+    try { res = await classifyMessage(text); } catch (e) { logError({ origen: 'ia', error: e, cliente: who.phone, mensaje: text }); }
+    log('DIA', `${who.phone}: "${text}" no es solo un día → ${res?.tipo ?? 'IA no disponible'}`);
+
+    if (res?.tipo === 'pedido' && res.pedido?.articulos?.length) {
+      // Añade al pedido en curso lo que pida de más.
+      item.order.articulos.push(...res.pedido.articulos);
+      item.order.mensajeOriginal += `\n${text}`;
+      if (res.revisar) markForReview(item.order, res.motivo || 'Revisar pedido');
+      savePending();
+      log('DIA', `${who.phone}: añadidos ${res.pedido.articulos.map(a => `${a.cantidad} ${a.producto}`).join(', ')}`);
+      const added = res.pedido.articulos.map(a => `• ${a.cantidad ? a.cantidad + ' ' : ''}${a.producto}`).join('\n');
+      // "También 1 de albóndigas para el martes": añade y cierra con ese día.
+      const diaDirecto = res.pedido.dia_texto && schedule.parseDayAnswer(res.pedido.dia_texto, item.days, new Date(), { allowOptionNumber: false });
+      if (diaDirecto?.key) {
+        cancelPendingDay(who.key);
+        setOrderDay(item.order, diaDirecto.key);
+        return finalizeAndPrintOrder(item.order, msg, who);
+      }
+      const resumen = item.order.articulos.map(a => `• ${a.cantidad ? a.cantidad + ' ' : ''}${a.producto}`).join('\n');
+      const cierre = diaDirecto?.closed ? `${closedDayText(diaDirecto)}\n\n` : '';
+      return reply(msg, `➕ Añadido a tu pedido:\n${added}\n\n🧾 Tu pedido ahora:\n${resumen}\n\n${cierre}${again()}`, who);
     }
-    if (res?.tipo === 'relevo') {
-      // Pregunta que el bot no sabe contestar: se registra el pedido sin día y pasa a una persona.
-      cancelPendingDay(senderId);
+    if (res?.tipo === 'horario') { await reply(msg, schedule.hoursReply(), who); return reply(msg, again(), who); }
+    if (res?.tipo === 'carta' && catalog.menuMessage()) { await reply(msg, catalog.menuMessage(), who); return reply(msg, again(), who); }
+    if (res?.tipo === 'saludo' || res?.tipo === 'agradecimiento') {
+      return reply(msg, `Tu pedido está casi listo, solo falta el día de recogida.\n\n${again()}`, who);
+    }
+    // Ni pedido ni pregunta conocida: puede que sí sea un día escrito con más palabras.
+    if (!pure) r = schedule.parseDayAnswer(text, item.days, new Date(), { allowOptionNumber: false });
+    if (r?.key) {
+      cancelPendingDay(who.key);
+      setOrderDay(item.order, r.key);
+      log('DIA', `${who.phone}: "${text}" → ${item.order.diaLargo}`);
+      return finalizeAndPrintOrder(item.order, msg, who);
+    }
+    if (!r && (res?.tipo === 'relevo' || !res)) {
+      // No sabe responder (o la IA está caída): se registra el pedido y pasa a una persona.
+      cancelPendingDay(who.key);
       markForReview(item.order, 'Falta confirmar el día de recogida');
-      await finalizeAndPrintOrder(item.order, msg, senderId, { handoffMotivo: res.motivo || 'Pregunta durante la elección de día', handoffTexto: text, categoria: 'consulta' });
+      await finalizeAndPrintOrder(item.order, msg, who, { handoffMotivo: res?.motivo || 'Pregunta durante la elección de día', handoffTexto: text, categoria: res ? 'consulta' : 'ia_caida' });
       return;
     }
   }
 
   item.attempts++;
+  savePending();
   if (item.attempts >= MAX_DAY_ATTEMPTS) {
-    cancelPendingDay(senderId);
+    cancelPendingDay(who.key);
     markForReview(item.order, 'No se entendió el día de recogida');
-    await finalizeAndPrintOrder(item.order, msg, senderId, { handoffMotivo: 'No se entendió el día de recogida', handoffTexto: text, categoria: 'dia_no_entendido' });
+    await finalizeAndPrintOrder(item.order, msg, who, { handoffMotivo: 'No se entendió el día de recogida', handoffTexto: text, categoria: 'dia_no_entendido' });
     return;
   }
   const head = r?.closed ? closedDayText(r) : MSG.diaNoEntendido;
-  await reply(msg, `${head}\n\n${schedule.pickupDaysMessage(item.days)}`);
+  await reply(msg, `${head}\n\n${again()}`, who);
 }
 
-async function finalizeAndPrintOrder(record, msg, senderId, { handoffMotivo, handoffTexto, categoria = 'pedido_dudoso' } = {}) {
+async function finalizeAndPrintOrder(record, target, who, { handoffMotivo, handoffTexto, categoria = 'pedido_dudoso' } = {}) {
   orders.set(record.id, record);
   saveOrders(orders);
   broadcast('new_order', record);
+  log('PEDIDO', `PIN ${record.pin} · ${record.sender} · ${record.diaLargo || 'sin día'}${record.revisar ? ' · REVISAR' : ''}`);
 
-  try {
-    await printTicket(record, record.pin);
-  } catch (err) {
-    log('ERROR', `Impresora: ${err.message}`);
-    logError({ origen: 'impresora', error: err, cliente: record.sender });
-    record.printError = { message: err.message, timestamp: new Date().toISOString(), retries: 0 };
-    saveOrders(orders); broadcast('order_updated', record);
-  }
-
+  // Primero se confirma al cliente y después se imprime: una impresora lenta,
+  // sin papel o atascada nunca debe dejar al cliente sin respuesta.
   const lista = record.articulos.map(a => `• ${a.cantidad ? a.cantidad + ' ' : ''}${a.producto}`).join('\n');
   const diaTexto = record.dia ? `\n\n📅 Recogida: *${record.diaLargo}*` : '';
   let texto = `✅ ¡Pedido recibido!\n\n${lista}${diaTexto}\n\nCódigo de recogida: *${record.pin}*\nIndícalo al llegar al mostrador.`;
   if (record.revisar) texto += `\n\n${MSG.relevoPedido}`;
-  await reply(msg, texto);
+  const sent = await reply(target, texto, who);
 
-  // Un pedido marcado para revisar siempre implica que una persona contacte con el cliente.
-  if (record.revisar) {
-    await startHandoff(senderId, msg, handoffMotivo || record.motivoRevision || 'Pedido para revisar', handoffTexto || record.mensajeOriginal, null, categoria);
+  // Un pedido marcado para revisar, o cuya confirmación no llegó, pasa a una persona.
+  if (record.revisar || !sent) {
+    await startHandoff(who, target, handoffMotivo || record.motivoRevision || (sent ? 'Pedido para revisar' : 'No se pudo enviar la confirmación del pedido'),
+      handoffTexto || record.mensajeOriginal, null, sent ? categoria : 'error_interno');
+  }
+
+  printOrder(record); // en segundo plano
+}
+
+async function printOrder(record) {
+  if (!isPrintingEnabled()) {
+    // Modo pruebas: no se gasta papel. El pedido queda marcado para poder imprimirlo luego a mano.
+    record.printSkipped = true;
+    saveOrders(orders); broadcast('order_updated', record);
+    log('PRINT', `Impresión desactivada: ticket ${record.pin} NO impreso`);
+    return;
+  }
+  try {
+    await printTicket(record, record.pin);
+    log('PRINT', `Ticket ${record.pin} enviado a la impresora`);
+  } catch (err) {
+    log('ERROR', `Impresora (${record.pin}): ${err.message}`);
+    logError({ origen: 'impresora', error: err, cliente: record.sender });
+    record.printError = { message: err.message, timestamp: new Date().toISOString(), retries: 0 };
+    saveOrders(orders); broadcast('order_updated', record);
   }
 }
 
@@ -567,6 +709,7 @@ process.on('unhandledRejection', err => {
 });
 
 log('BOOT', `Iniciando ${SHOP_NAME}...`);
+if (!isPrintingEnabled()) log('WARN', 'La impresión automática está DESACTIVADA (modo pruebas). Actívala desde el panel.');
 const festivosWarn = schedule.missingLocalHolidaysWarning();
 if (festivosWarn) log('WARN', festivosWarn);
 client.initialize();

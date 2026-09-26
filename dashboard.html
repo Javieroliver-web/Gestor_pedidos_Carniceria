@@ -169,6 +169,21 @@ body { font-family: system-ui,-apple-system,sans-serif; background:var(--bg); co
 .modal.wide { max-width:640px; }
 /* Información para desarrolladores */
 .dev-wrap { position:relative; }
+/* Impresión desactivada: aviso imposible de pasar por alto */
+.print-off-banner { display:none; background:var(--red); color:#fff; padding:10px 20px; font-weight:700; font-size:13px; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.print-off-banner.show { display:flex; }
+.print-off-banner button { background:#fff; color:var(--red); border:none; border-radius:6px; padding:6px 14px; font-weight:700; cursor:pointer; font-family:inherit; }
+.hbtn.print-off { background:var(--red); border-color:var(--red); color:#fff; }
+.skip-banner { background:var(--surface2); border-top:1px solid var(--border); padding:6px 14px; font-size:11px; color:var(--text2); }
+.toggle-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px; border:1.5px solid var(--border); border-radius:10px; margin-bottom:16px; }
+.toggle-row strong { display:block; font-size:13px; }
+.toggle-row span { font-size:11px; color:var(--text2); }
+.switch { position:relative; width:44px; height:24px; flex-shrink:0; }
+.switch input { opacity:0; width:0; height:0; }
+.switch .sl { position:absolute; inset:0; background:var(--red); border-radius:24px; cursor:pointer; transition:.2s; }
+.switch .sl::before { content:''; position:absolute; width:18px; height:18px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; }
+.switch input:checked + .sl { background:var(--green); }
+.switch input:checked + .sl::before { transform:translateX(20px); }
 .show-sm { display:none; }
 @media (max-width: 760px) { .show-sm { display:inline; } }
 .dev-panel { position:absolute; top:calc(100% + 10px); left:0; width:380px; max-width:calc(100vw - 24px); max-height:calc(100vh - 80px); overflow-y:auto; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:12px; box-shadow:0 12px 40px rgba(0,0,0,.25); z-index:150; padding:14px; display:none; font-size:12px; }
@@ -244,6 +259,10 @@ body { font-family: system-ui,-apple-system,sans-serif; background:var(--bg); co
   </div>
 </header>
 
+<div class="print-off-banner" id="printOffBanner">
+  <span>🖨️✕ IMPRESIÓN DESACTIVADA — los pedidos nuevos NO se imprimen (modo pruebas)<span id="printOffSince" style="font-weight:400;opacity:.85"></span></span>
+  <button onclick="setPrinting(true)">Activar impresión</button>
+</div>
 <!-- STATS & TABS -->
 <div class="stats">
   <div class="stat stat-pending"><div class="stat-num" id="cntPending">0</div><div class="stat-label">Pendientes</div></div>
@@ -323,6 +342,10 @@ body { font-family: system-ui,-apple-system,sans-serif; background:var(--bg); co
       <button class="modal-close" onclick="closePrinterModal()">✕</button>
     </div>
     <div class="modal-body">
+      <div class="toggle-row">
+        <div><strong>Imprimir tickets automáticamente</strong><span>Apágalo para hacer pruebas sin gastar papel. Reimprimir a mano sigue funcionando.</span></div>
+        <label class="switch"><input type="checkbox" id="printingSwitch" onchange="setPrinting(this.checked)"><span class="sl"></span></label>
+      </div>
       <div id="printerList"><div style="font-size:12px;color:var(--text3);padding:8px 0;">Cargando...</div></div>
       
       <div style="margin-top: 20px;">
@@ -358,12 +381,26 @@ function toggleSound(){ soundOn=!soundOn; document.getElementById('soundBtn').st
 function beep(){ if(soundOn) try{ const c=new(window.AudioContext||window.webkitAudioContext)(); [[880,0],[1100,160]].forEach(([f,d])=>{ const o=c.createOscillator(),g=c.createGain(); o.connect(g);g.connect(c.destination);o.frequency.value=f; const t=c.currentTime+d/1000; g.gain.setValueAtTime(.25,t);g.gain.exponentialRampToValueAtTime(.001,t+.25); o.start(t);o.stop(t+.3); }); }catch{} }
 function beepError(){ if(soundOn) try{ const c=new(window.AudioContext||window.webkitAudioContext)(); const o=c.createOscillator(),g=c.createGain(); o.connect(g);g.connect(c.destination);o.frequency.value=260; g.gain.setValueAtTime(.3,c.currentTime);g.gain.exponentialRampToValueAtTime(.001,c.currentTime+.7); o.start();o.stop(c.currentTime+.7); }catch{} }
 
+let printingOn = true;
+function renderPrinting(p){
+  printingOn = p?.enabled !== false;
+  document.getElementById('printOffBanner').classList.toggle('show', !printingOn);
+  document.getElementById('printOffSince').textContent = !printingOn && p?.changedAt ? ' · desde las '+new Date(p.changedAt).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}) : '';
+  const sw=document.getElementById('printingSwitch'); if(sw) sw.checked=printingOn;
+  updatePrinterLabel(activePrinter);
+}
+async function setPrinting(on){
+  if(!on && !confirm('¿Desactivar la impresión automática?\n\nLos pedidos nuevos NO se imprimirán hasta que la vuelvas a activar.')){ document.getElementById('printingSwitch').checked=true; return; }
+  const r=await fetch('/api/printing',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on})});
+  if(r.ok) renderPrinting(await r.json());
+}
 function updatePrinterLabel(iface){
   activePrinter = iface || ''; 
   let l = iface || 'Sin impresora';
   if(l.length > 18) l = l.substring(0,16)+'…';
   document.getElementById('printerLabel').textContent = l;
-  document.getElementById('printerBtn').className = 'hbtn' + (!iface ? ' warn' : '');
+  document.getElementById('printerBtn').className = 'hbtn' + (!printingOn ? ' print-off' : (!iface ? ' warn' : ''));
+  if(!printingOn) document.getElementById('printerLabel').textContent = 'Impresión OFF';
 }
 
 // ── Render WA Status ──────────────────────────────────────────────────────────
@@ -423,7 +460,9 @@ setTimeout(()=>{ fetch('/api/dev').then(r=>r.json()).then(d=>{ const b=document.
     renderWaStatus(d.waState, d.waQrUrl);
     store.clear(); d.orders.forEach(o=>store.set(o.id,o)); render();
     renderHandoffs(d.handoffs||[]);
+    renderPrinting(d.printing);
   });
+  es.addEventListener('printing',e=>renderPrinting(JSON.parse(e.data)));
   es.addEventListener('handoffs',e=>{
     const list=JSON.parse(e.data);
     if(list.length>handoffList.length) beep();
@@ -478,7 +517,7 @@ function render(){
   
   visible.forEach((o,idx)=>{
     const ex=document.getElementById('c-'+o.id);
-    const changed=!ex||ex.dataset.status!==o.status||ex.dataset.pe!==String(!!o.printError)||ex.dataset.rev!==String(!!o.revisar);
+    const changed=!ex||ex.dataset.status!==o.status||ex.dataset.pe!==String(!!o.printError)||ex.dataset.rev!==String(!!o.revisar)||ex.dataset.skip!==String(!!o.printSkipped);
     if(changed){
       const div=document.createElement('div'); div.innerHTML=cardHTML(o);
       const ne=div.firstElementChild;
@@ -509,7 +548,7 @@ function cardHTML(o){
   </div>`;
   
   const revBanner=o.revisar&&!inactive?`<div class="rev-banner"><div class="rev-msg"><strong>⚠ Revisar con el cliente</strong>${esc(o.motivoRevision||'')}</div><button class="btn-rev" onclick="markReviewed('${esc(o.id)}')">Revisado</button></div>`:'';
-  return `<div class="card status-${esc(o.status)} ${o.printError?'has-print-error':''}" id="c-${esc(o.id)}" data-id="${esc(o.id)}" data-status="${esc(o.status)}" data-pe="${!!o.printError}" data-rev="${!!o.revisar}"><div class="card-pin"><div class="pin-code">${esc(o.pin)}</div><div class="pin-side"><div class="pin-time">${ft(o.createdAt)}</div><span class="status-pill">${esc(labels[o.status]??o.status)}</span></div></div>${errBanner}${revBanner}<div class="card-body"><div class="card-name">${esc(o.cliente||'Cliente')}</div>${o.diaLargo?`<div class="card-dia">📅 Recoge: ${esc(o.diaLargo)}</div>`:(o.hora?`<div class="card-dia">🕒 Recoge: ${esc(o.hora)}</div>`:`<div class="card-dia none">📅 Sin día de recogida</div>`)}<div style="height:1px; background:var(--border); margin-bottom:10px;"></div><div class="items">${items}</div></div>${actions}</div>`;
+  return `<div class="card status-${esc(o.status)} ${o.printError?'has-print-error':''}" id="c-${esc(o.id)}" data-id="${esc(o.id)}" data-status="${esc(o.status)}" data-pe="${!!o.printError}" data-rev="${!!o.revisar}" data-skip="${!!o.printSkipped}"><div class="card-pin"><div class="pin-code">${esc(o.pin)}</div><div class="pin-side"><div class="pin-time">${ft(o.createdAt)}</div><span class="status-pill">${esc(labels[o.status]??o.status)}</span></div></div>${errBanner}${revBanner}${o.printSkipped&&!o.printError?'<div class="skip-banner">🖨️ No impreso (impresión desactivada) — usa el botón de imprimir si lo necesitas</div>':''}<div class="card-body"><div class="card-name">${esc(o.cliente||'Cliente')}</div>${o.diaLargo?`<div class="card-dia">📅 Recoge: ${esc(o.diaLargo)}</div>`:(o.hora?`<div class="card-dia">🕒 Recoge: ${esc(o.hora)}</div>`:`<div class="card-dia none">📅 Sin día de recogida</div>`)}<div style="height:1px; background:var(--border); margin-bottom:10px;"></div><div class="items">${items}</div></div>${actions}</div>`;
 }
 
 // ── Card actions ──────────────────────────────────────────────────────────────
@@ -536,7 +575,7 @@ function renderHandoffs(list){
   if(!list.length){ box.classList.remove('show'); box.innerHTML=''; return; }
   box.classList.add('show');
   box.innerHTML=`<div class="handoffs-title">🙋 ${list.length} cliente(s) esperando a una persona — el bot no les contesta hasta medianoche</div>`+
-    list.map(h=>`<div class="handoff"><span class="handoff-num">+${esc(h.sender)}</span><span class="handoff-why">${esc(h.motivo)}${h.mensaje?' — “'+esc(String(h.mensaje).slice(0,80))+'”':''}</span><span class="handoff-until">desde ${ft(h.desde)}</span><button class="mbtn" style="padding:5px 10px;font-size:11px" onclick="releaseHandoff('${esc(h.sender)}')">Devolver al bot</button></div>`).join('');
+    list.map(h=>`<div class="handoff"><span class="handoff-num">+${esc(h.telefono||h.sender)}</span><span class="handoff-why">${esc(h.motivo)}${h.mensaje?' — “'+esc(String(h.mensaje).slice(0,80))+'”':''}</span><span class="handoff-until">desde ${ft(h.desde)}</span><button class="mbtn" style="padding:5px 10px;font-size:11px" onclick="releaseHandoff('${esc(h.sender)}')">Devolver al bot</button></div>`).join('');
 }
 async function releaseHandoff(sender){ await fetch('/api/handoffs/'+encodeURIComponent(sender)+'/release',{method:'POST'}); }
 
@@ -559,21 +598,33 @@ async function loadInc(tipo){
 }
 
 // ── Información para desarrolladores ──────────────────────────────────────────
-let devTimer=null;
+// Datos del servidor cada 5 s; cuentas atrás y tiempos relativos cada segundo.
+let devTimer=null, devTick=null, clockSkew=0;
+function stopDev(){ clearInterval(devTimer); clearInterval(devTick); }
 function toggleDev(e){
   e.stopPropagation();
   const p=document.getElementById('devPanel');
-  if(p.classList.toggle('open')){ loadDev(); devTimer=setInterval(loadDev,10000); }
-  else { clearInterval(devTimer); }
+  if(p.classList.toggle('open')){ loadDev(); devTimer=setInterval(loadDev,5000); devTick=setInterval(tickDev,1000); }
+  else stopDev();
 }
-document.addEventListener('click',()=>{ const p=document.getElementById('devPanel'); if(p&&p.classList.contains('open')){ p.classList.remove('open'); clearInterval(devTimer); } });
+document.addEventListener('click',()=>{ const p=document.getElementById('devPanel'); if(p&&p.classList.contains('open')){ p.classList.remove('open'); stopDev(); } });
+function serverNow(){ return Date.now()+clockSkew; }
+function fmtLeft(ms){ const s=Math.max(0,Math.ceil(ms/1000)); const h=Math.floor(s/3600),m=Math.floor(s%3600/60),r=s%60; return h?`${h}h ${m}m ${r}s`:m?`${m}m ${r}s`:`${r}s`; }
+function tickDev(){
+  document.querySelectorAll('[data-reset]').forEach(el=>{
+    const left=new Date(el.dataset.reset)-serverNow();
+    el.textContent= left>0 ? 'se reinicia en '+fmtLeft(left) : 'ya reiniciado · se actualizará con la próxima llamada';
+  });
+  document.querySelectorAll('[data-ago]').forEach(el=>{ el.textContent=fmtAgo(el.dataset.ago); });
+  document.querySelectorAll('[data-since]').forEach(el=>{ el.textContent=fmtUp(Math.floor((serverNow()-new Date(el.dataset.since))/1000)); });
+}
 
-function fmtAgo(iso){ if(!iso) return '—'; const s=Math.round((Date.now()-new Date(iso))/1000); if(s<60) return 'hace '+s+' s'; if(s<3600) return 'hace '+Math.round(s/60)+' min'; if(s<86400) return 'hace '+Math.round(s/3600)+' h'; return new Date(iso).toLocaleDateString('es-ES'); }
-function fmtUp(sec){ const d=Math.floor(sec/86400),h=Math.floor(sec%86400/3600),m=Math.floor(sec%3600/60); return (d?d+'d ':'')+h+'h '+m+'m'; }
+function fmtAgo(iso){ if(!iso) return '—'; const s=Math.max(0,Math.round((serverNow()-new Date(iso))/1000)); if(s<60) return 'hace '+s+' s'; if(s<3600) return 'hace '+Math.round(s/60)+' min'; if(s<86400) return 'hace '+Math.round(s/3600)+' h'; return new Date(iso).toLocaleDateString('es-ES'); }
+function fmtUp(sec){ const d=Math.floor(sec/86400),h=Math.floor(sec%86400/3600),m=Math.floor(sec%3600/60),s=sec%60; return (d?d+'d ':'')+h+'h '+m+'m '+s+'s'; }
 function meter(label, m){
   if(!m||m.limite==null) return `<div class="meter"><div class="meter-top"><span>${label}</span><b>sin datos</b></div><div class="meter-bar"><div class="meter-fill" style="width:0"></div></div><div class="meter-sub">Se actualiza con la próxima llamada a Groq</div></div>`;
   const pct=Math.max(0,Math.min(100,m.restantePct??0)); const cls=pct<15?'low':pct<40?'mid':'';
-  return `<div class="meter"><div class="meter-top"><span>${label}</span><b>${pct}% libre</b></div><div class="meter-bar"><div class="meter-fill ${cls}" style="width:${pct}%"></div></div><div class="meter-sub">${esc(m.restantes)} de ${esc(m.limite)} restantes${m.reinicio?' · se reinicia en '+esc(m.reinicio):''}</div></div>`;
+  return `<div class="meter"><div class="meter-top"><span>${label}</span><b>${pct}% libre</b></div><div class="meter-bar"><div class="meter-fill ${cls}" style="width:${pct}%"></div></div><div class="meter-sub">${esc(m.restantes)} de ${esc(m.limite)} restantes${m.reinicioEn?' · <span data-reset="'+esc(m.reinicioEn)+'"></span>':(m.reinicio?' · se reinicia en '+esc(m.reinicio):'')} · dato de ${m.actualizado?'<span data-ago="'+esc(m.actualizado)+'"></span>':'—'}</div></div>`;
 }
 function counters(title, data, cls){
   const cats=Object.entries(data.categorias).map(([k,c])=>`<span class="cnt-cat ${c.total?cls:'zero'}" title="Hoy: ${c.hoy}">${esc(c.etiqueta)} <b>${c.total}</b></span>`).join('');
@@ -583,15 +634,16 @@ async function loadDev(){
   const p=document.getElementById('devPanel');
   try{
     const d=await (await fetch('/api/dev')).json();
+    if(d.sistema?.ahora) clockSkew=new Date(d.sistema.ahora)-Date.now();
     const g=d.ia.groq, gm=d.ia.gemini, c=d.ia.clasificaciones;
     const badge=document.getElementById('devBadge'); badge.style.display=d.logs.errores.hoy?'flex':'none'; badge.textContent=d.logs.errores.hoy;
     p.innerHTML=`
       <div class="dev-sec"><div class="dev-h"><span>IA · Groq</span><span>${esc(g.modelo)}</span></div>
-        ${meter('Peticiones del día', g.limites?.peticionesDia)}
-        ${meter('Tokens por minuto', g.limites?.tokensMinuto)}
+        ${meter('Peticiones del día', g.limites?.peticionesDia&&{...g.limites.peticionesDia,actualizado:g.limites.actualizado})}
+        ${meter('Tokens por minuto', g.limites?.tokensMinuto&&{...g.limites.tokensMinuto,actualizado:g.limites.actualizado})}
         <div class="dev-row"><span>Llamadas / errores</span><span>${g.llamadas} / ${g.errores}</span></div>
         <div class="dev-row"><span>Última latencia</span><span>${g.ultimaLatenciaMs!=null?g.ultimaLatenciaMs+' ms':'—'}</span></div>
-        <div class="dev-row"><span>Última llamada</span><span>${fmtAgo(g.ultimaLlamada)}</span></div>
+        <div class="dev-row"><span>Última llamada</span><span data-ago="${esc(g.ultimaLlamada||'')}">${fmtAgo(g.ultimaLlamada)}</span></div>
         <div class="dev-row"><span>Tokens consumidos</span><span>${g.tokensUsados.toLocaleString('es-ES')}</span></div>
         ${g.ultimoError?`<div class="dev-note">Último error (${fmtAgo(g.ultimoError.fecha)}): ${esc(g.ultimoError.mensaje)}</div>`:''}
       </div>
@@ -613,12 +665,14 @@ async function loadDev(){
         <div class="dev-row"><span>WhatsApp</span><span>${esc(d.whatsapp.estado)}</span></div>
         <div class="dev-row"><span>Pedidos activos / para revisar</span><span>${d.pedidos.pendientes} / ${d.pedidos.paraRevisar}</span></div>
         <div class="dev-row"><span>Esperando día / relevos activos</span><span>${d.pedidos.esperandoDia} / ${d.relevosActivos}</span></div>
+        <div class="dev-row"><span>Impresión automática</span><span style="color:${d.impresionActiva?'var(--green)':'var(--red)'}">${d.impresionActiva?'ACTIVADA':'DESACTIVADA'}</span></div>
         <div class="dev-row"><span>Productos en la carta</span><span>${d.productosEnCarta}</span></div>
-        <div class="dev-row"><span>En marcha</span><span>${fmtUp(d.sistema.uptimeSeg)}</span></div>
+        <div class="dev-row"><span>En marcha</span><span data-since="${esc(d.sistema.arranque)}">${fmtUp(d.sistema.uptimeSeg)}</span></div>
         <div class="dev-row"><span>Memoria</span><span>${d.sistema.memoriaMB} MB</span></div>
         <div class="dev-row"><span>Escucha en</span><span>${esc(d.sistema.host)}:${d.sistema.puerto}</span></div>
         ${d.festivos?`<div class="dev-note">${esc(d.festivos)}</div>`:''}
       </div>`;
+    tickDev();
   }catch{ p.innerHTML='<div style="color:var(--red)">No se pudo obtener la información.</div>'; }
 }
 

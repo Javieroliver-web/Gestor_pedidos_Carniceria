@@ -36,6 +36,7 @@ Gestor_pedidos_Carniceria/
 ├── orders.json           ← Base de datos JSON de pedidos persistidos
 ├── config.json           ← Memoria de impresoras y perfiles de papel
 ├── handoffs.json         ← Clientes pasados a una persona (hasta medianoche)
+├── pending.json          ← Pedidos esperando que el cliente elija día (sobreviven a reinicios)
 ├── logs/                 ← fallos_bot.jsonl y errores.jsonl
 ├── .wwebjs_auth/         ← Sesión encriptada de WhatsApp Web
 └── node_modules/         ← Dependencias

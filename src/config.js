@@ -60,6 +60,8 @@ function saveOrders(ordersMap) {
 const config = loadConfig();
 let currentPrinter = (config.activePrinter || config.printerInterface || PRINTER_INTERFACE).replace(/^(printer:|tcp:\/\/)/i, '').trim();
 let printerProfiles = config.profiles || {};
+// Impresión automática de tickets. Se puede apagar desde el panel para hacer pruebas sin gastar papel.
+let printingEnabled = config.printingEnabled !== false;
 
 function getPrinterName(iface) {
   return (iface || '').replace(/^printer:/i, '').trim();
@@ -83,6 +85,14 @@ module.exports = {
   getCurrentPrinter: () => currentPrinter,
   setCurrentPrinter: (p) => { currentPrinter = p; },
   getProfiles: () => printerProfiles,
+  isPrintingEnabled: () => printingEnabled,
+  setPrintingEnabled: (on) => {
+    printingEnabled = Boolean(on);
+    config.printingEnabled = printingEnabled;
+    config.printingChangedAt = new Date().toISOString();
+    saveConfig(config);
+  },
+  getPrintingChangedAt: () => config.printingChangedAt || null,
   savePrinterConfig: (iface, profile) => {
     currentPrinter = iface;
     if (profile) printerProfiles[iface] = profile;
