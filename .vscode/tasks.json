@@ -1,0 +1,22 @@
+{
+    // Tareas del proyecto. En VS Code: Ctrl+Shift+P → "Tasks: Run Task" y elige una.
+    // Ctrl+Shift+B lanza la tarea por defecto: "Actualizar bot".
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "Actualizar bot (verificar + pruebas + reiniciar)",
+        "type": "npm", "script": "actualizar",
+        "group": { "kind": "build", "isDefault": true },
+        "problemMatcher": []
+      },
+      { "label": "Verificar archivos",       "type": "npm", "script": "verificar",        "problemMatcher": [] },
+      { "label": "Pruebas automáticas",      "type": "npm", "script": "test",             "group": "test", "problemMatcher": [] },
+      { "label": "Reiniciar bot",            "type": "npm", "script": "bot:reiniciar",    "problemMatcher": [] },
+      { "label": "Estado del bot",           "type": "npm", "script": "bot:estado",       "problemMatcher": [] },
+      { "label": "Ver log (últimas 60)",     "type": "npm", "script": "bot:logs:ultimos", "problemMatcher": [] },
+      { "label": "Ver log en directo",       "type": "npm", "script": "bot:logs",         "isBackground": true, "problemMatcher": [] },
+      { "label": "Arrancar bot con PM2",     "type": "npm", "script": "bot:arrancar",     "problemMatcher": [] },
+      { "label": "Parar bot",                "type": "npm", "script": "bot:parar",        "problemMatcher": [] },
+      { "label": "Abrir panel",              "type": "shell", "command": "start http://127.0.0.1:3000", "problemMatcher": [] }
+    ]
+  }

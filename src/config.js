@@ -12,6 +12,10 @@ const {
   HOST              = '127.0.0.1',
   GROQ_MODEL        = 'openai/gpt-oss-120b',
   GEMINI_MODEL      = 'gemini-2.5-flash',
+  WHISPER_MODEL     = 'whisper-large-v3-turbo',
+  // Transcribir notas de voz (on/off) y duración máxima en segundos
+  AUDIO_TRANSCRIPTION = 'on',
+  AUDIO_MAX_SECONDS   = '120',
 } = process.env;
 
 if (!GROQ_API_KEY) {
@@ -31,29 +35,24 @@ function log(tag, msg) {
 const CONFIG_FILE = path.join(__dirname, '..', 'config.json');
 const ORDERS_FILE = path.join(__dirname, '..', 'orders.json');
 
+const { writeJsonAtomic, readJson } = require('./storage');
+
 function loadConfig() {
-  try { if (fs.existsSync(CONFIG_FILE)) return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); }
-  catch (e) { log('WARN', `config.json: ${e.message}`); }
-  return {};
+  return readJson(CONFIG_FILE, {}, log);
 }
 
 function saveConfig(cfg) {
-  try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2)); }
+  try { writeJsonAtomic(CONFIG_FILE, cfg); }
   catch (e) { log('ERROR', `No se pudo guardar config.json: ${e.message}`); }
 }
 
 function loadOrders() {
-  try {
-    if (fs.existsSync(ORDERS_FILE)) {
-      const arr = JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf8'));
-      return new Map(arr.map(o => [o.id, o]));
-    }
-  } catch (e) { log('WARN', `orders.json: ${e.message}`); }
-  return new Map();
+  const arr = readJson(ORDERS_FILE, [], log);
+  return new Map((Array.isArray(arr) ? arr : []).map(o => [o.id, o]));
 }
 
 function saveOrders(ordersMap) {
-  try { fs.writeFileSync(ORDERS_FILE, JSON.stringify([...ordersMap.values()], null, 2)); }
+  try { writeJsonAtomic(ORDERS_FILE, [...ordersMap.values()]); }
   catch (e) { log('ERROR', `No se pudo guardar orders.json: ${e.message}`); }
 }
 
@@ -68,8 +67,8 @@ function getPrinterName(iface) {
 }
 
 // PIN de 4 cifras que no choque con ningún pedido activo (pending/ready).
-function genPin(ordersMap) {
-  const inUse = new Set();
+function genPin(ordersMap, extraInUse = []) {
+  const inUse = new Set(extraInUse);
   if (ordersMap) for (const o of ordersMap.values()) if (['pending', 'ready'].includes(o.status)) inUse.add(o.pin);
   for (let i = 0; i < 50; i++) {
     const pin = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
@@ -79,7 +78,9 @@ function genPin(ordersMap) {
 }
 
 module.exports = {
-  GROQ_API_KEY, GEMINI_API_KEY, GROQ_MODEL, GEMINI_MODEL, SHOP_NAME, PORT, HOST, log,
+  GROQ_API_KEY, GEMINI_API_KEY, GROQ_MODEL, GEMINI_MODEL, WHISPER_MODEL,
+  AUDIO_TRANSCRIPTION: AUDIO_TRANSCRIPTION !== 'off', AUDIO_MAX_SECONDS: Number(AUDIO_MAX_SECONDS) || 120,
+  SHOP_NAME, PORT, HOST, log,
   loadConfig, saveConfig, loadOrders, saveOrders,
   getPrinterName, genPin,
   getCurrentPrinter: () => currentPrinter,

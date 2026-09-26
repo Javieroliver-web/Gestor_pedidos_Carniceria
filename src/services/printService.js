@@ -21,6 +21,37 @@ async function printTicket(order, pin, opts = {}) {
   }
 }
 
+// La etiqueta es de 76x76 mm. Con Consolas 10 pt caben ~34 caracteres por línea y ~17 líneas.
+// Si el pedido es largo se parte en líneas y se reduce la letra (hasta 6 pt) para que no se corte.
+function fitLabel(text) {
+  const BASE_SIZE = 10, BASE_COLS = 34, BASE_ROWS = 17, MIN_SIZE = 6;
+  const wrap = (cols) => text.split('\n').flatMap(line => {
+    if (line.length <= cols) return [line];
+    const out = [];
+    const lead = line.match(/^\s*/)[0];
+    const indent = lead + '    ';
+    const words = line.trim().split(/ +/);
+    let cur = lead + words.shift();
+    for (const word of words) {
+      if ((cur + ' ' + word).length > cols) { out.push(cur); cur = indent + word; }
+      else cur += ' ' + word;
+    }
+    if (cur.trim()) out.push(cur.trimEnd());
+    return out;
+  });
+  for (let size = BASE_SIZE; size >= MIN_SIZE; size--) {
+    const cols = Math.floor(BASE_COLS * BASE_SIZE / size), rows = Math.floor(BASE_ROWS * BASE_SIZE / size);
+    const lines = wrap(cols);
+    if (lines.length <= rows) return { text: lines.join('\n'), size };
+  }
+  // Ni a 6 pt cabe: se imprime lo que quepa y se avisa de que el resto está en el panel.
+  const cols = Math.floor(BASE_COLS * BASE_SIZE / MIN_SIZE), rows = Math.floor(BASE_ROWS * BASE_SIZE / MIN_SIZE);
+  const lines = wrap(cols);
+  const kept = lines.slice(0, rows - 1);
+  kept.push(` ...(+${lines.length - kept.length} lineas: ver panel)`);
+  return { text: kept.join('\n'), size: MIN_SIZE };
+}
+
 async function printSquareLabel(order, pin, printerName) {
   const now = new Date();
   const fecha = now.toLocaleDateString('es-ES');
@@ -39,9 +70,10 @@ async function printSquareLabel(order, pin, printerName) {
   }
   ticketText += `${separator}\n   Indica tu PIN en mostrador.`;
 
+  const fitted = fitLabel(ticketText);
   const tempFilePath = path.join(__dirname, '..', '..', `ticket_${pin}_${Date.now()}.txt`);
   try {
-    fs.writeFileSync(tempFilePath, ticketText, 'utf8');
+    fs.writeFileSync(tempFilePath, fitted.text, 'utf8');
     // Nombre de impresora y ruta se pasan por variables de entorno, nunca interpolados
     // en el script: una comilla en el nombre permitía ejecutar PowerShell arbitrario.
     const psScript = `
@@ -59,7 +91,7 @@ async function printSquareLabel(order, pin, printerName) {
       $printDocument.DefaultPageSettings = $pageSettings;
       $printDocument.add_PrintPage({
           param($sender, $e)
-          $font = New-Object System.Drawing.Font('Consolas', 10);
+          $font = New-Object System.Drawing.Font('Consolas', [single]$env:CARN_FONT);
           $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Black);
           $e.Graphics.DrawString($content, $font, $brush, 0, 0);
       }.GetNewClosure());
@@ -68,7 +100,7 @@ async function printSquareLabel(order, pin, printerName) {
     const encodedCommand = Buffer.from(psScript, 'utf16le').toString('base64');
     await execFilePromise('powershell', ['-NoProfile', '-EncodedCommand', encodedCommand], {
       timeout: 15000,
-      env: { ...process.env, CARN_PRINTER: printerName, CARN_TICKET: tempFilePath },
+      env: { ...process.env, CARN_PRINTER: printerName, CARN_TICKET: tempFilePath, CARN_FONT: String(fitted.size) },
     });
   } finally {
     try { if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath); } catch {}
@@ -120,4 +152,4 @@ function listWindowsPrinters() {
   });
 }
 
-module.exports = { printTicket, listWindowsPrinters };
+module.exports = { printTicket, listWindowsPrinters, _fitLabel: fitLabel };

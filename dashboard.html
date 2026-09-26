@@ -175,6 +175,14 @@ body { font-family: system-ui,-apple-system,sans-serif; background:var(--bg); co
 .print-off-banner button { background:#fff; color:var(--red); border:none; border-radius:6px; padding:6px 14px; font-weight:700; cursor:pointer; font-family:inherit; }
 .hbtn.print-off { background:var(--red); border-color:var(--red); color:#fff; }
 .skip-banner { background:var(--surface2); border-top:1px solid var(--border); padding:6px 14px; font-size:11px; color:var(--text2); }
+.cat-group { margin-bottom:14px; }
+.cat-group h4 { font-size:10px; font-weight:700; letter-spacing:.6px; text-transform:uppercase; color:var(--text3); margin-bottom:6px; }
+.cat-item { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:7px 10px; border:1px solid var(--border); border-radius:8px; margin-bottom:4px; font-size:13px; }
+.cat-item.off { background:var(--red-light); border-color:var(--red-mid); }
+.cat-item.off span { color:var(--red); text-decoration:line-through; }
+.cat-search { width:100%; padding:9px 12px; border:1.5px solid var(--border); border-radius:8px; font-family:inherit; font-size:13px; margin-bottom:12px; }
+.tag { display:inline-block; font-size:10px; font-weight:600; padding:1px 7px; border-radius:10px; background:var(--surface2); color:var(--text2); margin-left:6px; vertical-align:middle; }
+.tag.ok { background:var(--green-light); color:var(--green); }
 .toggle-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px; border:1.5px solid var(--border); border-radius:10px; margin-bottom:16px; }
 .toggle-row strong { display:block; font-size:13px; }
 .toggle-row span { font-size:11px; color:var(--text2); }
@@ -247,6 +255,10 @@ body { font-family: system-ui,-apple-system,sans-serif; background:var(--bg); co
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
       Incidencias
     </button>
+    <button class="hbtn" id="catBtn" onclick="openCatModal()" title="Marcar productos agotados">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+      <span class="hide-sm">Carta</span> <span class="tab-badge" id="agotBadge" style="display:none">0</span>
+    </button>
     <button class="hbtn" id="soundBtn" onclick="toggleSound()">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 010 7.07"/><path d="M19.07 4.93a10 10 0 010 14.14"/></svg>
       Sonido
@@ -297,6 +309,21 @@ body { font-family: system-ui,-apple-system,sans-serif; background:var(--bg); co
         <button class="mbtn" id="incTab-errores" onclick="loadInc('errores')">Errores</button>
       </div>
       <div id="incList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL DE CARTA / AGOTADOS ──────────────────────────────────────────── -->
+<div class="overlay hidden" id="catOverlay" onclick="if(event.target===this)closeCatModal()">
+  <div class="modal wide">
+    <div class="modal-header">
+      <div class="modal-title">Carta · productos agotados</div>
+      <button class="modal-close" onclick="closeCatModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:var(--text2);margin-bottom:10px">Los productos agotados desaparecen de la carta que envía el bot. Si un cliente los pide, se le avisa y no se añaden al pedido.</div>
+      <input class="cat-search" id="catSearch" placeholder="Buscar producto…" oninput="renderCat()">
+      <div id="catList"></div>
     </div>
   </div>
 </div>
@@ -448,6 +475,7 @@ function renderWaStatus(state, qrUrl) {
 }
 
 // ── SSE ───────────────────────────────────────────────────────────────────────
+setTimeout(loadCat,300);
 setTimeout(()=>{ fetch('/api/dev').then(r=>r.json()).then(d=>{ const b=document.getElementById('devBadge'); b.style.display=d.logs.errores.hoy?'flex':'none'; b.textContent=d.logs.errores.hoy; }).catch(()=>{}); },500);
 (function connectSSE(){
   const es=new EventSource('/events');
@@ -463,6 +491,7 @@ setTimeout(()=>{ fetch('/api/dev').then(r=>r.json()).then(d=>{ const b=document.
     renderPrinting(d.printing);
   });
   es.addEventListener('printing',e=>renderPrinting(JSON.parse(e.data)));
+  es.addEventListener('catalog_changed',()=>loadCat());
   es.addEventListener('handoffs',e=>{
     const list=JSON.parse(e.data);
     if(list.length>handoffList.length) beep();
@@ -517,7 +546,7 @@ function render(){
   
   visible.forEach((o,idx)=>{
     const ex=document.getElementById('c-'+o.id);
-    const changed=!ex||ex.dataset.status!==o.status||ex.dataset.pe!==String(!!o.printError)||ex.dataset.rev!==String(!!o.revisar)||ex.dataset.skip!==String(!!o.printSkipped);
+    const changed=!ex||ex.dataset.status!==o.status||ex.dataset.pe!==String(!!o.printError)||ex.dataset.rev!==String(!!o.revisar)||ex.dataset.skip!==String(!!o.printSkipped)||ex.dataset.av!==String(!!o.avisadoListo);
     if(changed){
       const div=document.createElement('div'); div.innerHTML=cardHTML(o);
       const ne=div.firstElementChild;
@@ -548,7 +577,7 @@ function cardHTML(o){
   </div>`;
   
   const revBanner=o.revisar&&!inactive?`<div class="rev-banner"><div class="rev-msg"><strong>⚠ Revisar con el cliente</strong>${esc(o.motivoRevision||'')}</div><button class="btn-rev" onclick="markReviewed('${esc(o.id)}')">Revisado</button></div>`:'';
-  return `<div class="card status-${esc(o.status)} ${o.printError?'has-print-error':''}" id="c-${esc(o.id)}" data-id="${esc(o.id)}" data-status="${esc(o.status)}" data-pe="${!!o.printError}" data-rev="${!!o.revisar}" data-skip="${!!o.printSkipped}"><div class="card-pin"><div class="pin-code">${esc(o.pin)}</div><div class="pin-side"><div class="pin-time">${ft(o.createdAt)}</div><span class="status-pill">${esc(labels[o.status]??o.status)}</span></div></div>${errBanner}${revBanner}${o.printSkipped&&!o.printError?'<div class="skip-banner">🖨️ No impreso (impresión desactivada) — usa el botón de imprimir si lo necesitas</div>':''}<div class="card-body"><div class="card-name">${esc(o.cliente||'Cliente')}</div>${o.diaLargo?`<div class="card-dia">📅 Recoge: ${esc(o.diaLargo)}</div>`:(o.hora?`<div class="card-dia">🕒 Recoge: ${esc(o.hora)}</div>`:`<div class="card-dia none">📅 Sin día de recogida</div>`)}<div style="height:1px; background:var(--border); margin-bottom:10px;"></div><div class="items">${items}</div></div>${actions}</div>`;
+  return `<div class="card status-${esc(o.status)} ${o.printError?'has-print-error':''}" id="c-${esc(o.id)}" data-id="${esc(o.id)}" data-status="${esc(o.status)}" data-pe="${!!o.printError}" data-rev="${!!o.revisar}" data-skip="${!!o.printSkipped}" data-av="${!!o.avisadoListo}"><div class="card-pin"><div class="pin-code">${esc(o.pin)}</div><div class="pin-side"><div class="pin-time">${ft(o.createdAt)}</div><span class="status-pill">${esc(labels[o.status]??o.status)}</span></div></div>${errBanner}${revBanner}${o.printSkipped&&!o.printError?'<div class="skip-banner">🖨️ No impreso (impresión desactivada) — usa el botón de imprimir si lo necesitas</div>':''}<div class="card-body"><div class="card-name">${esc(o.cliente||'Cliente')}${o.porAudio?'<span class="tag" title="Pedido hecho por nota de voz">🎤 audio</span>':''}${o.avisadoListo?'<span class="tag ok" title="Se le avisó por WhatsApp">📲 avisado</span>':''}</div>${o.diaLargo?`<div class="card-dia">📅 Recoge: ${esc(o.diaLargo)}</div>`:(o.hora?`<div class="card-dia">🕒 Recoge: ${esc(o.hora)}</div>`:`<div class="card-dia none">📅 Sin día de recogida</div>`)}<div style="height:1px; background:var(--border); margin-bottom:10px;"></div><div class="items">${items}</div></div>${actions}</div>`;
 }
 
 // ── Card actions ──────────────────────────────────────────────────────────────
@@ -595,6 +624,25 @@ async function loadInc(tipo){
       return `<div class="inc-row"><div class="when">${esc(when)}${r.cliente?' · +'+esc(r.cliente):''}</div><div class="what">${esc(what)}</div>${r.mensaje?`<div class="txt">${esc(r.mensaje)}</div>`:''}</div>`;
     }).join('');
   }catch{ list.innerHTML='<div style="font-size:12px;color:var(--red)">No se pudieron cargar las incidencias.</div>'; }
+}
+
+// ── Carta / agotados ──────────────────────────────────────────────────────────
+let catData=[];
+async function openCatModal(){ document.getElementById('catOverlay').classList.remove('hidden'); await loadCat(); }
+function closeCatModal(){ document.getElementById('catOverlay').classList.add('hidden'); }
+async function loadCat(){ try{ catData=await (await fetch('/api/catalog')).json(); }catch{ catData=[]; } renderCat(); updateAgotBadge(); }
+function updateAgotBadge(){ const n=catData.filter(p=>p.agotado).length; const b=document.getElementById('agotBadge'); b.style.display=n?'flex':'none'; b.textContent=n; }
+function renderCat(){
+  const q=(document.getElementById('catSearch').value||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const groups={};
+  catData.filter(p=>!q||p.nombre.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').includes(q)).forEach(p=>{(groups[p.categoria]=groups[p.categoria]||[]).push(p);});
+  const html=Object.entries(groups).map(([cat,list])=>`<div class="cat-group"><h4>${esc(cat)}</h4>${list.map(p=>`<div class="cat-item ${p.agotado?'off':''}"><span>${esc(p.nombre)}</span><label class="switch" title="${p.agotado?'Agotado':'Disponible'}"><input type="checkbox" ${p.agotado?'':'checked'} onchange="setAgotado(${esc(JSON.stringify(p.nombre))},!this.checked)"><span class="sl"></span></label></div>`).join('')}</div>`).join('');
+  document.getElementById('catList').innerHTML=html||'<div style="font-size:12px;color:var(--text3)">Sin resultados.</div>';
+}
+async function setAgotado(nombre,agotado){
+  const r=await fetch('/api/catalog/agotado',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nombre,agotado})});
+  if(r.ok){ const p=catData.find(x=>x.nombre===nombre); if(p) p.agotado=agotado; renderCat(); updateAgotBadge(); }
+  else { alert('No se pudo guardar el cambio.'); loadCat(); }
 }
 
 // ── Información para desarrolladores ──────────────────────────────────────────
@@ -652,8 +700,13 @@ async function loadDev(){
         <div class="dev-row"><span>Llamadas / errores</span><span>${gm.llamadas} / ${gm.errores}</span></div>
         ${gm.ultimoError?`<div class="dev-note">Último error: ${esc(gm.ultimoError.mensaje)}</div>`:''}
       </div>
+      <div class="dev-sec"><div class="dev-h"><span>Notas de voz · Whisper</span><span>${esc(d.ia.audio?.modelo||'')}</span></div>
+        <div class="dev-row"><span>Transcritas / errores</span><span>${d.ia.audio?.transcripciones??0} / ${d.ia.audio?.errores??0}</span></div>
+        <div class="dev-row"><span>Segundos de audio</span><span>${d.ia.audio?.segundos??0} s</span></div>
+        ${d.ia.audio?.ultimoError?`<div class="dev-note">Último error: ${esc(d.ia.audio.ultimoError.mensaje)}</div>`:''}
+      </div>
       <div class="dev-sec"><div class="dev-h"><span>Clasificación de mensajes</span><span>desde ${new Date(d.ia.inicio).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</span></div>
-        <div class="dev-row"><span>Pedidos · Horario · Carta · Saludos</span><span>${c.pedido} · ${c.horario} · ${c.carta??0} · ${c.saludo+c.agradecimiento}</span></div>
+        <div class="dev-row"><span>Pedidos · Horario · Carta · Estado · Saludos</span><span>${c.pedido} · ${c.horario} · ${c.carta??0} · ${c.estado??0} · ${c.saludo+c.agradecimiento}</span></div>
         <div class="dev-row"><span>Pasados a persona</span><span>${c.relevo}</span></div>
         <div class="dev-row"><span>Respuestas de IA no válidas</span><span>${d.ia.respuestasInvalidas}</span></div>
       </div>

@@ -1,99 +1,456 @@
 {
-    "_info": "Carta de elaborados que el bot envía cuando un cliente la pide. Se relee en cada petición: puedes editar este archivo sin reiniciar el bot. 'activo': false oculta un producto sin borrarlo.",
-    "titulo": "🥩 *Elaborados de la Carnicería Raúl Oliver*",
-    "pie": "Para hacer tu pedido escríbenos qué quieres y cuánto (por ejemplo: _4 flamenquines y 1 kg de albóndigas_). Si buscas algo que no está en la lista, pregúntanos 😊",
-    "categorias": [
-      {
-        "nombre": "Hamburguesas",
-        "productos": [
-          { "nombre": "Hamburguesa de ternera", "activo": true },
-          { "nombre": "Hamburguesa de ternera con queso de cabra", "activo": true },
-          { "nombre": "Hamburguesa de ternera y queso de oveja", "activo": true },
-          { "nombre": "Hamburguesa ibérica", "activo": true },
-          { "nombre": "Hamburguesa de pollo", "activo": true },
-          { "nombre": "Hamburguesa de pollo con queso de cabra", "activo": true },
-          { "nombre": "Hamburguesa de pollo con espinacas", "activo": true }
-        ]
-      },
-      {
-        "nombre": "Flamenquines y empanados",
-        "productos": [
-          { "nombre": "Flamenquín", "activo": true },
-          { "nombre": "Flamenquín de cerdo y huevo", "activo": true },
-          { "nombre": "Flamenquín de pollo y huevo", "activo": true },
-          { "nombre": "Flamenquín 4 quesos", "activo": true },
-          { "nombre": "San Jacobo", "activo": true },
-          { "nombre": "Cachopo", "activo": true },
-          { "nombre": "Cordon bleu", "activo": true },
-          { "nombre": "Filete de pollo empanado", "activo": true },
-          { "nombre": "Taquitos de pollo empanado", "activo": true },
-          { "nombre": "Lagrimitas de pollo", "activo": true },
-          { "nombre": "Bartolito", "activo": true },
-          { "nombre": "Lolito de pollo", "activo": true }
-        ]
-      },
-      {
-        "nombre": "Rellenos",
-        "productos": [
-          { "nombre": "Pechuga rellena de roquefort", "activo": true },
-          { "nombre": "Pechuga de pollo con quicos", "activo": true },
-          { "nombre": "Solomillo de cerdo relleno", "activo": true },
-          { "nombre": "Rellenos de carne de cerdo", "activo": true },
-          { "nombre": "Berenjena rellena", "activo": true },
-          { "nombre": "Pimiento relleno", "activo": true }
-        ]
-      },
-      {
-        "nombre": "Burritos",
-        "productos": [
-          { "nombre": "Burrito vegetal", "activo": true },
-          { "nombre": "Burrito barbacoa", "activo": true },
-          { "nombre": "Burrito de cheddar", "activo": true }
-        ]
-      },
-      {
-        "nombre": "Carne picada",
-        "productos": [
-          { "nombre": "Albóndigas", "activo": true },
-          { "nombre": "Bomba de carne", "activo": true },
-          { "nombre": "Bomba de carne con queso", "activo": true },
-          { "nombre": "Magdalena de carne", "activo": true },
-          { "nombre": "Magdalena de pollo con queso de cabra", "activo": true },
-          { "nombre": "Magdalena de ternera con queso de cabra", "activo": true },
-          { "nombre": "Pastel de carne", "activo": true },
-          { "nombre": "Sándwich de carne", "activo": true }
-        ]
-      },
-      {
-        "nombre": "Embutidos, pinchos y brochetas",
-        "productos": [
-          { "nombre": "Chorizo", "activo": true },
-          { "nombre": "Chorizo picante", "activo": true },
-          { "nombre": "Chistorra", "activo": true },
-          { "nombre": "Salchichas de pollo", "activo": true },
-          { "nombre": "Pincho moruno", "activo": true },
-          { "nombre": "Pincho de calabacín", "activo": true },
-          { "nombre": "Brocheta de pollo", "activo": true },
-          { "nombre": "Brocheta de pollo a las finas hierbas", "activo": true }
-        ]
-      },
-      {
-        "nombre": "Adobados y guisos",
-        "productos": [
-          { "nombre": "Churrasquito de pollo", "activo": true },
-          { "nombre": "Churrasco de pollo aliñao", "activo": true },
-          { "nombre": "Contramuslo de pollo a las finas hierbas", "activo": true },
-          { "nombre": "Jamoncito de pollo Texas", "activo": true },
-          { "nombre": "Pollo taki-taki", "activo": true },
-          { "nombre": "Pollo con champiñones", "activo": true },
-          { "nombre": "Filete de pollo en salsa verde", "activo": true },
-          { "nombre": "Alitas barbacoa", "activo": true },
-          { "nombre": "Costillas barbacoa", "activo": true },
-          { "nombre": "Lomo mojo picón", "activo": true },
-          { "nombre": "Solomillo al whisky", "activo": true },
-          { "nombre": "Rotin de ternera", "activo": true },
-          { "nombre": "Carrillada del bosque", "activo": true }
-        ]
-      }
-    ]
-  }
+  "_info": "Carta de elaborados que el bot envía cuando un cliente la pide, y lista de productos que se reconocen al hacer un pedido. Se relee en cada petición: puedes editarlo sin reiniciar. 'activo': false oculta un producto; 'agotado': true lo marca como agotado (también desde el panel). 'frescos' son palabras de productos al corte que no salen en la carta pero se aceptan en los pedidos.",
+  "titulo": "🥩 *Elaborados de la Carnicería Raúl Oliver*",
+  "pie": "Para hacer tu pedido escríbenos qué quieres y cuánto (por ejemplo: _4 flamenquines y 1 kg de albóndigas_). Si buscas algo que no está en la lista, pregúntanos 😊",
+  "categorias": [
+    {
+      "nombre": "Hamburguesas",
+      "productos": [
+        {
+          "nombre": "Hamburguesa de ternera",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Hamburguesa de ternera con queso de cabra",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Hamburguesa de ternera y queso de oveja",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Hamburguesa ibérica",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Hamburguesa de pollo",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Hamburguesa de pollo con queso de cabra",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Hamburguesa de pollo con espinacas",
+          "activo": true,
+          "agotado": false
+        }
+      ]
+    },
+    {
+      "nombre": "Flamenquines y empanados",
+      "productos": [
+        {
+          "nombre": "Flamenquín",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Flamenquín de cerdo y huevo",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Flamenquín de pollo y huevo",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Flamenquín 4 quesos",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "San Jacobo",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Cachopo",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Cordon bleu",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Filete de pollo empanado",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Taquitos de pollo empanado",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Lagrimitas de pollo",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Bartolito",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Lolito de pollo",
+          "activo": true,
+          "agotado": false
+        }
+      ]
+    },
+    {
+      "nombre": "Rellenos",
+      "productos": [
+        {
+          "nombre": "Pechuga rellena de roquefort",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Pechuga de pollo con quicos",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Solomillo de cerdo relleno",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Rellenos de carne de cerdo",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Berenjena rellena",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Pimiento relleno",
+          "activo": true,
+          "agotado": false
+        }
+      ]
+    },
+    {
+      "nombre": "Burritos",
+      "productos": [
+        {
+          "nombre": "Burrito vegetal",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Burrito barbacoa",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Burrito de cheddar",
+          "activo": true,
+          "agotado": false
+        }
+      ]
+    },
+    {
+      "nombre": "Carne picada",
+      "productos": [
+        {
+          "nombre": "Albóndigas",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Bomba de carne",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Bomba de carne con queso",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Magdalena de carne",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Magdalena de pollo con queso de cabra",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Magdalena de ternera con queso de cabra",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Pastel de carne",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Sándwich de carne",
+          "activo": true,
+          "agotado": false
+        }
+      ]
+    },
+    {
+      "nombre": "Embutidos, pinchos y brochetas",
+      "productos": [
+        {
+          "nombre": "Chorizo",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Chorizo picante",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Chistorra",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Salchichas de pollo",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Pincho moruno",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Pincho de calabacín",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Brocheta de pollo",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Brocheta de pollo a las finas hierbas",
+          "activo": true,
+          "agotado": false
+        }
+      ]
+    },
+    {
+      "nombre": "Adobados y guisos",
+      "productos": [
+        {
+          "nombre": "Churrasquito de pollo",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Churrasco de pollo aliñao",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Contramuslo de pollo a las finas hierbas",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Jamoncito de pollo Texas",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Pollo taki-taki",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Pollo con champiñones",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Filete de pollo en salsa verde",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Alitas barbacoa",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Costillas barbacoa",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Lomo mojo picón",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Solomillo al whisky",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Rotin de ternera",
+          "activo": true,
+          "agotado": false
+        },
+        {
+          "nombre": "Carrillada del bosque",
+          "activo": true,
+          "agotado": false
+        }
+      ]
+    }
+  ],
+  "frescos": [
+    "carne",
+    "ternera",
+    "añojo",
+    "vaca",
+    "buey",
+    "cerdo",
+    "ibérico",
+    "pollo",
+    "gallina",
+    "pavo",
+    "conejo",
+    "cordero",
+    "choto",
+    "cabrito",
+    "codorniz",
+    "lomo",
+    "lomo en manteca",
+    "chuleta",
+    "chuletón",
+    "entrecot",
+    "filete",
+    "escalope",
+    "pechuga",
+    "muslo",
+    "contramuslo",
+    "jamoncito",
+    "alitas",
+    "ala",
+    "carcasa",
+    "solomillo",
+    "secreto",
+    "presa",
+    "pluma",
+    "abanico",
+    "carrillada",
+    "costilla",
+    "costillar",
+    "panceta",
+    "tocino",
+    "careta",
+    "oreja",
+    "manitas",
+    "rabo",
+    "morro",
+    "hígado",
+    "riñones",
+    "callos",
+    "menudo",
+    "morcilla",
+    "chorizo",
+    "salchichón",
+    "salchicha",
+    "longaniza",
+    "morcón",
+    "butifarra",
+    "sobrasada",
+    "jamón",
+    "paleta",
+    "lacón",
+    "carne picada",
+    "picada",
+    "picadillo",
+    "molida",
+    "hamburguesa",
+    "pincho",
+    "pinchito",
+    "brocheta",
+    "redondo",
+    "aguja",
+    "falda",
+    "morcillo",
+    "osobuco",
+    "jarrete",
+    "babilla",
+    "tapa",
+    "contra",
+    "cadera",
+    "espaldilla",
+    "pecho",
+    "pringá",
+    "avíos",
+    "puchero",
+    "carne de puchero",
+    "hueso",
+    "espinazo",
+    "manteca",
+    "zurrapa",
+    "caldo",
+    "relleno",
+    "empanado",
+    "adobo",
+    "adobado",
+    "guiso",
+    "estofado",
+    "barbacoa",
+    "parrillada",
+    "asadura",
+    "mollejas",
+    "sesos",
+    "lengua",
+    "pata",
+    "cuello",
+    "pollo de campo",
+    "picantón",
+    "carrillá",
+    "orza",
+    "lomo de orza",
+    "chicharrón",
+    "chicharrones",
+    "torreznos",
+    "papada",
+    "cabeza",
+    "sangre",
+    "morcilla de cebolla",
+    "salchichón ibérico",
+    "filete ruso",
+    "albóndiga",
+    "pinchito moruno",
+    "churrasco",
+    "secreto ibérico",
+    "presa ibérica",
+    "costillas",
+    "riñón",
+    "chacina",
+    "embutido",
+    "queso de cerdo",
+    "cabeza de jabalí"
+  ]
+}

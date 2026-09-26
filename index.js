@@ -10,21 +10,22 @@ const {
   loadOrders, saveOrders,
   getCurrentPrinter, getProfiles, savePrinterConfig,
   isPrintingEnabled, setPrintingEnabled, getPrintingChangedAt,
-  genPin, getPrinterName
+  genPin, getPrinterName, AUDIO_TRANSCRIPTION, AUDIO_MAX_SECONDS
 } = require('./src/config');
 
-const { classifyMessage, getAiStats } = require('./src/services/aiService');
+const { classifyMessage, transcribeAudio, getAiStats } = require('./src/services/aiService');
 const { printTicket, listWindowsPrinters } = require('./src/services/printService');
 const { logFallo, logError, readRecent, logSummary } = require('./src/services/incidentLog');
 const schedule = require('./src/schedule');
 const catalog = require('./src/catalog');
+const { writeJsonAtomic, readJson } = require('./src/storage');
 
 // ── Textos fijos que recibe el cliente (la IA nunca redacta respuestas) ──────
 const MSG = {
   saludo:
     '¡Hola! 👋 Soy el asistente de la Carnicería Raúl Oliver.\n\n' +
-    'Puedes hacerme tu pedido por aquí (por ejemplo: _1 kg de lomo y 6 filetes de pollo_) ' +
-    'o preguntarme por el horario.',
+    'Puedes hacerme tu pedido por aquí, escrito o por audio (por ejemplo: _1 kg de lomo y 6 filetes de pollo_), ' +
+    'pedirme la *carta* de elaborados o preguntarme por el *horario*.',
   agradecimiento: '¡Gracias a ti! 😊',
   relevo:
     '🙋 Esta consulta tiene que verla una persona de la carnicería. ' +
@@ -33,6 +34,8 @@ const MSG = {
     '🙋 Hay algo de tu pedido que tiene que revisar una persona de la carnicería. ' +
     'Te escribiremos por aquí para confirmarlo.',
   diaNoEntendido: 'No he entendido el día. Responde solo con el número de la opción, por favor.',
+  anulado: '❌ Pedido anulado. Si quieres pedir otra cosa, escríbenos cuando quieras.',
+  listo: pin => `✅ ¡Tu pedido ya está listo! Código de recogida: *${pin}*.\nTe esperamos en el mostrador.`,
 };
 
 // ── Pedidos ───────────────────────────────────────────────────────────────────
@@ -56,15 +59,12 @@ const HANDOFFS_FILE = path.join(__dirname, 'handoffs.json');
 const handoffs = new Map(); // clave cliente -> { sender, telefono, desde, hasta, motivo, mensaje }
 
 (function loadHandoffs() {
-  try {
-    if (fs.existsSync(HANDOFFS_FILE)) {
-      for (const h of JSON.parse(fs.readFileSync(HANDOFFS_FILE, 'utf8'))) handoffs.set(h.sender, h);
-    }
-  } catch (e) { log('WARN', `handoffs.json: ${e.message}`); }
+  const arr = readJson(HANDOFFS_FILE, [], log);
+  for (const h of Array.isArray(arr) ? arr : []) if (h?.sender) handoffs.set(h.sender, h);
 })();
 
 function saveHandoffs() {
-  try { fs.writeFileSync(HANDOFFS_FILE, JSON.stringify([...handoffs.values()], null, 2)); }
+  try { writeJsonAtomic(HANDOFFS_FILE, [...handoffs.values()]); }
   catch (e) { log('ERROR', `No se pudo guardar handoffs.json: ${e.message}`); }
 }
 
@@ -87,9 +87,15 @@ async function startHandoff(who, target, motivo, texto, replyText = MSG.relevo, 
   const h = { sender: who.key, telefono: who.phone, desde: new Date().toISOString(), hasta: schedule.nextMidnight().toISOString(), motivo, categoria, mensaje: texto };
   handoffs.set(who.key, h);
   saveHandoffs();
-  cancelPendingDay(who.key);
+  // Si tenía un pedido a medias (esperando día), no se pierde: se registra para revisar.
+  const pend = cancelPendingDay(who.key);
+  if (pend) {
+    markForReview(pend.order, 'Pasado a una persona antes de elegir día');
+    registerOrder(pend.order);
+  }
   broadcast('handoffs', [...handoffs.values()]);
-  logFallo({ categoria, motivo, cliente: who.phone, mensaje: texto });
+  // Que el dueño conteste a mano no es un fallo del bot: no cuenta como warning.
+  if (categoria !== 'atendido_manual') logFallo({ categoria, motivo, cliente: who.phone, mensaje: texto });
   log('RELEVO', `${who.phone}: ${motivo}`);
   if (replyText) await reply(target, replyText, who);
 }
@@ -133,19 +139,29 @@ app.get('/events', (req, res) => {
 
 app.get('/api/orders', (_req, res) => res.json([...orders.values()].reverse()));
 
-app.post('/api/orders/:id/ready', (req, res) => {
+app.post('/api/orders/:id/ready', async (req, res) => {
   const o = orders.get(req.params.id);
   if (!o) return res.status(404).json({ error: 'No encontrado' });
+  if (o.status !== 'pending') return res.status(400).json({ error: 'Solo un pedido pendiente puede pasar a listo' });
   o.status = 'ready';
+  o.readyAt = new Date().toISOString();
   saveOrders(orders); broadcast('order_updated', o);
   log('WEB', `Pedido ${o.pin} → LISTO`);
   res.json(o);
+  // Aviso al cliente por WhatsApp (una sola vez por pedido)
+  if (o.chatId && !o.avisadoListo && waState === 'CONNECTED') {
+    const ok = await reply({ chatId: o.chatId }, MSG.listo(o.pin), { phone: o.sender });
+    o.avisadoListo = ok ? new Date().toISOString() : null;
+    saveOrders(orders); broadcast('order_updated', o);
+  }
 });
 
 app.post('/api/orders/:id/done', (req, res) => {
   const o = orders.get(req.params.id);
   if (!o) return res.status(404).json({ error: 'No encontrado' });
+  if (['done', 'discarded'].includes(o.status)) return res.status(400).json({ error: 'El pedido ya está cerrado' });
   o.status = 'done';
+  o.doneAt = new Date().toISOString();
   saveOrders(orders); broadcast('order_updated', o);
   log('WEB', `Pedido ${o.pin} → RECOGIDO`);
   res.json(o);
@@ -188,6 +204,26 @@ app.post('/api/orders/:id/retry-print', async (req, res) => {
     log('ERROR', `Reimpresión ${o.pin}: ${err.message}`);
     logError({ origen: 'impresora', error: err, cliente: o.sender });
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Carta: ver productos y marcar agotados desde el panel
+app.get('/api/catalog', (_req, res) => {
+  const list = catalog.allProducts().filter(p => p.activo !== false).map(p => ({ nombre: p.nombre, categoria: p.categoria, agotado: Boolean(p.agotado) }));
+  res.json(list);
+});
+app.post('/api/catalog/agotado', (req, res) => {
+  const { nombre, agotado } = req.body ?? {};
+  if (typeof nombre !== 'string' || typeof agotado !== 'boolean') return res.status(400).json({ error: 'nombre y agotado requeridos' });
+  try {
+    const p = catalog.setAgotado(nombre, agotado);
+    if (!p) return res.status(404).json({ error: 'Producto no encontrado' });
+    log('WEB', `${p.nombre} → ${agotado ? 'AGOTADO' : 'disponible'}`);
+    broadcast('catalog_changed', { nombre: p.nombre, agotado: p.agotado });
+    res.json({ nombre: p.nombre, agotado: p.agotado });
+  } catch (e) {
+    log('ERROR', `No se pudo guardar productos.json: ${e.message}`);
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -328,9 +364,27 @@ const client = new Client({
   puppeteer: { headless: true, executablePath: browserPath, args: ['--no-sandbox', '--disable-setuid-sandbox'] },
 });
 
+function qrToDataUrl(text) {
+  try {
+    const QRCode = require('qrcode-terminal/vendor/QRCode');
+    const QRErrorCorrectLevel = require('qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel');
+    const q = new QRCode(-1, QRErrorCorrectLevel.L);
+    q.addData(text); q.make();
+    const n = q.getModuleCount(), m = 4;
+    let rects = '';
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.isDark(r, c)) rects += `M${c + m},${r + m}h1v1h-1z`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n + 2 * m} ${n + 2 * m}" shape-rendering="crispEdges"><rect width="100%" height="100%" fill="#fff"/><path d="${rects}" fill="#000"/></svg>`;
+    return 'data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64');
+  } catch (e) {
+    log('WARN', `No se pudo generar el QR para el panel (${e.message}); usa el de la consola.`);
+    return '';
+  }
+}
+
 client.on('qr', qr => {
   waState = 'QR';
-  waQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(qr)}`;
+  // El QR se genera en local: antes se enviaba el código de vinculación a un servicio externo.
+  waQrUrl = qrToDataUrl(qr);
   broadcastWaState();
   console.log('\n══════════════════════════════════════════════');
   console.log('   Escanea este QR con WhatsApp para vincular  ');
@@ -361,7 +415,7 @@ const MAX_DAY_ATTEMPTS = 2;
 function savePending() {
   try {
     const data = [...pendingDay.values()].map(({ who, chatId, order, days, attempts, since }) => ({ who, chatId, order, days, attempts, since }));
-    fs.writeFileSync(PENDING_FILE, JSON.stringify(data, null, 2));
+    writeJsonAtomic(PENDING_FILE, data);
   } catch (e) { log('ERROR', `No se pudo guardar pending.json: ${e.message}`); }
 }
 
@@ -390,9 +444,8 @@ function setPendingDay(key, item, ttl = PENDING_DAY_TTL_MS) {
 
 // Al arrancar, recupera los pedidos que esperaban día antes del reinicio.
 function restorePending() {
-  let data = [];
-  try { if (fs.existsSync(PENDING_FILE)) data = JSON.parse(fs.readFileSync(PENDING_FILE, 'utf8')); }
-  catch (e) { log('WARN', `pending.json: ${e.message}`); }
+  let data = readJson(PENDING_FILE, [], log);
+  if (!Array.isArray(data)) data = [];
   for (const it of data) {
     if (!it?.who?.key || pendingDay.has(it.who.key)) continue;
     const left = PENDING_DAY_TTL_MS - (Date.now() - (it.since || 0));
@@ -431,13 +484,12 @@ function withTimeout(promise, ms, label) {
 // Se usa el número real siempre que se pueda, para que los mensajes de una misma
 // persona se reconozcan como la misma conversación y el panel muestre su teléfono.
 const lidToPhone = new Map();
-async function identify(msg) {
-  const chatId = msg.from;
+async function identifyChat(chatId, getContact) {
   const raw = chatId.split('@')[0];
   let phone = chatId.endsWith('@c.us') ? raw : lidToPhone.get(raw);
   if (!phone) {
     try {
-      const contact = await withTimeout(msg.getContact(), 4000, 'getContact');
+      const contact = await withTimeout(getContact(), 4000, 'getContact');
       const n = String(contact?.number || '').replace(/\D/g, '');
       if (n && n !== raw) phone = n;
     } catch (e) { log('WARN', `No se pudo obtener el teléfono de ${raw}: ${e.message}`); }
@@ -445,11 +497,22 @@ async function identify(msg) {
   }
   return { key: phone || raw, phone: phone || raw, chatId };
 }
+const identify = msg => identifyChat(msg.from, () => msg.getContact());
+
+// Textos que ha enviado el bot en los últimos 2 minutos, para distinguirlos de
+// los que escribe el dueño a mano desde el móvil de la tienda.
+const botSent = new Map(); // `${chatId}|${texto}` -> timestamp
+function rememberBotText(chatId, text) {
+  const now = Date.now();
+  for (const [k, t] of botSent) if (now - t > 120000) botSent.delete(k);
+  botSent.set(`${chatId}|${text.trim()}`, now);
+}
 
 /** Envía un texto. target es el mensaje al que se responde o { chatId } si no hay mensaje (tras un reinicio). */
 async function reply(target, text, who) {
   const chatId = target?.from || target?.chatId;
   const to = who?.phone || String(chatId || '').split('@')[0];
+  rememberBotText(chatId, text);
   try {
     if (typeof target?.reply === 'function') await withTimeout(target.reply(text), 20000, 'reply');
     else await withTimeout(client.sendMessage(chatId, text), 20000, 'sendMessage');
@@ -469,54 +532,127 @@ async function reply(target, text, who) {
   }
 }
 
+// Cola por cliente: sus mensajes se procesan de uno en uno y en orden. Antes, si el
+// cliente escribía mientras la IA analizaba el mensaje anterior, ambos se procesaban
+// a la vez y un pedido podía pisar a otro.
+const queues = new Map();
+function enqueue(key, fn) {
+  const prev = queues.get(key) || Promise.resolve();
+  const next = prev.then(fn, fn).catch(() => {});
+  queues.set(key, next);
+  next.finally(() => { if (queues.get(key) === next) queues.delete(key); });
+  return next;
+}
+
+const isPrivateChat = id => /@(c\.us|lid)$/.test(id || '');
+
+// El dueño contesta a mano desde el móvil: el bot se aparta de esa conversación.
+client.on('message_create', async msg => {
+  try {
+    if (!msg.fromMe || !isPrivateChat(msg.to)) return;
+    if (msg.to === client.info?.wid?._serialized) return; // notas a uno mismo
+    const body = (msg.body || '').trim();
+    if (botSent.has(`${msg.to}|${body}`)) return; // lo ha enviado el bot
+    await new Promise(r => setTimeout(r, 1500));   // por si la confirmación del envío del bot llega tarde
+    if (botSent.has(`${msg.to}|${body}`)) return;
+    const who = await identifyChat(msg.to, () => client.getContactById(msg.to));
+    if (isInHandoff(who.key)) return;
+    await enqueue(who.key, () => startHandoff(who, { chatId: msg.to }, 'Atendido por una persona desde el móvil', body.slice(0, 200), null, 'atendido_manual'));
+  } catch (e) { log('WARN', `message_create: ${e.message}`); }
+});
+
+const IGNORED_TYPES = ['sticker', 'reaction', 'revoked', 'e2e_notification', 'notification', 'notification_template', 'call_log', 'protocol', 'gp2', 'ciphertext'];
+const AUDIO_TYPES = ['ptt', 'audio'];
+
 client.on('message', async msg => {
-  if (msg.fromMe || msg.from.includes('@g.us') || msg.from.includes('@broadcast') || msg.from === 'status@broadcast') return;
+  if (msg.fromMe || !isPrivateChat(msg.from)) return; // grupos, difusiones, estados
   if (processedMsgIds.has(msg.id._serialized)) return;
   processedMsgIds.add(msg.id._serialized);
   if (processedMsgIds.size > 1000) processedMsgIds.clear();
+  if (IGNORED_TYPES.includes(msg.type)) return; // un sticker 👍 no debe pasar el chat a una persona
 
   const who = await identify(msg);
-  const body = msg.body?.trim() || '';
-  log('IN', `${who.phone}${who.phone !== msg.from.split('@')[0] ? ` (${msg.from})` : ''} [${msg.type}] "${body.slice(0, 60)}"${pendingDay.has(who.key) ? ' · esperando día' : ''}${isInHandoff(who.key) ? ' · en relevo, no se responde' : ''}`);
-  if (isInHandoff(who.key)) return; // lo está atendiendo una persona
+  let body = msg.body?.trim() || '';
+  let fromAudio = false;
+  const inHandoff = isInHandoff(who.key);
 
-  // Audios, fotos, ubicaciones... el bot no los entiende: pasan a una persona.
-  if (!body) {
-    if (msg.hasMedia || ['ptt', 'audio', 'image', 'video', 'document', 'location', 'vcard', 'sticker'].includes(msg.type)) {
-      await startHandoff(who, msg, `Mensaje no de texto (${msg.type})`, `[${msg.type}]`, MSG.relevo, 'multimedia');
+  // Notas de voz: se transcriben y siguen el flujo normal como si fueran texto.
+  if (!inHandoff && AUDIO_TYPES.includes(msg.type)) {
+    const seconds = Number(msg.duration) || 0;
+    if (!AUDIO_TRANSCRIPTION) {
+      log('IN', `${who.phone} [audio ${seconds}s] (transcripción desactivada)`);
+      return enqueue(who.key, () => startHandoff(who, msg, 'Nota de voz (transcripción desactivada)', '[audio]', MSG.relevo, 'multimedia'));
     }
-    return; // reacciones, avisos de cifrado, etc.: no son mensajes del cliente
+    if (seconds > AUDIO_MAX_SECONDS) {
+      log('IN', `${who.phone} [audio ${seconds}s] demasiado largo`);
+      return enqueue(who.key, () => startHandoff(who, msg, `Nota de voz demasiado larga (${seconds} s)`, '[audio]', MSG.relevo, 'multimedia'));
+    }
+    try {
+      const media = await withTimeout(msg.downloadMedia(), 30000, 'downloadMedia');
+      if (!media?.data) throw new Error('audio vacío');
+      body = await transcribeAudio(Buffer.from(media.data, 'base64'), media.mimetype, seconds);
+      fromAudio = true;
+      if (!body) throw new Error('no se entendió nada');
+    } catch (e) {
+      log('WARN', `Audio de ${who.phone} no transcrito: ${e.message}`);
+      logError({ origen: 'ia', error: `Transcripción: ${e.message}`, cliente: who.phone });
+      return enqueue(who.key, () => startHandoff(who, msg, 'Nota de voz que no se pudo transcribir', '[audio]', MSG.relevo, 'multimedia'));
+    }
   }
-  if (body.length > 1500) {
-    await startHandoff(who, msg, 'Mensaje demasiado largo', body.slice(0, 300) + '…', MSG.relevo, 'mensaje_largo');
+
+  log('IN', `${who.phone}${who.phone !== msg.from.split('@')[0] ? ` (${msg.from})` : ''} [${fromAudio ? `audio → texto` : msg.type}] "${body.slice(0, 60)}"${pendingDay.has(who.key) ? ' · esperando día' : ''}${inHandoff ? ' · en relevo, no se responde' : ''}`);
+  if (inHandoff) return; // lo está atendiendo una persona
+
+  // Fotos, vídeos, documentos, ubicaciones, contactos: el bot no los entiende y pasan a una persona.
+  if (!body) {
+    if (msg.hasMedia || ['image', 'video', 'document', 'location', 'vcard', 'multi_vcard'].includes(msg.type)) {
+      return enqueue(who.key, () => startHandoff(who, msg, `Mensaje no de texto (${msg.type})`, `[${msg.type}]`, MSG.relevo, 'multimedia'));
+    }
     return;
   }
+  if (body.length > 1500) {
+    return enqueue(who.key, () => startHandoff(who, msg, 'Mensaje demasiado largo', body.slice(0, 300) + '…', MSG.relevo, 'mensaje_largo'));
+  }
 
-  if (!userBuffers.has(who.key)) userBuffers.set(who.key, { texts: [], msgs: [], timer: null });
+  if (!userBuffers.has(who.key)) userBuffers.set(who.key, { texts: [], msgs: [], timer: null, audio: false });
   const buffer = userBuffers.get(who.key);
   buffer.texts.push(body);
   buffer.msgs.push(msg);
+  buffer.audio = buffer.audio || fromAudio;
   if (buffer.timer) clearTimeout(buffer.timer);
 
   // Espera un poco por si el cliente manda el pedido en varios mensajes seguidos.
-  buffer.timer = setTimeout(async () => {
+  buffer.timer = setTimeout(() => {
     userBuffers.delete(who.key);
     const text = buffer.texts.join('. ');
     const lastMsg = buffer.msgs[buffer.msgs.length - 1];
-    try {
-      if (isInHandoff(who.key)) return;
-      if (pendingDay.has(who.key)) await handleDayAnswer(who, text, lastMsg);
-      else await handleMessage(who, text, lastMsg);
-    } catch (e) {
-      // Nunca se deja al cliente sin respuesta: si algo falla, pasa a una persona.
-      log('ERROR', `Procesando mensaje de ${who.phone}: ${e.message}`);
-      logError({ origen: 'sistema', error: e, cliente: who.phone, mensaje: text });
-      await startHandoff(who, lastMsg, 'Error interno procesando el mensaje', text, MSG.relevo, 'error_interno');
-    }
+    enqueue(who.key, async () => {
+      try {
+        if (isInHandoff(who.key)) return;
+        const ctx = { audio: buffer.audio };
+        if (pendingDay.has(who.key)) await handleDayAnswer(who, text, lastMsg, ctx);
+        else await handleMessage(who, text, lastMsg, ctx);
+      } catch (e) {
+        // Nunca se deja al cliente sin respuesta: si algo falla, pasa a una persona.
+        log('ERROR', `Procesando mensaje de ${who.phone}: ${e.message}`);
+        logError({ origen: 'sistema', error: e, cliente: who.phone, mensaje: text });
+        await startHandoff(who, lastMsg, 'Error interno procesando el mensaje', text, MSG.relevo, 'error_interno');
+      }
+    });
   }, 2500);
 });
 
-async function handleMessage(who, text, msg) {
+// Pedidos activos de un cliente (para "¿está ya lo mío?")
+function activeOrdersOf(who) {
+  return [...orders.values()].filter(o => o.sender === who.phone && ['pending', 'ready'].includes(o.status));
+}
+
+function orderStatusText(list) {
+  const lines = list.map(o => `• Código *${o.pin}*${o.diaLargo ? ` (${o.diaLargo})` : ''}: ${o.status === 'ready' ? '✅ listo para recoger' : '🔪 en preparación'}`);
+  return `🧾 Tus pedidos:\n${lines.join('\n')}`;
+}
+
+async function handleMessage(who, text, msg, ctx = {}) {
   let res;
   try {
     res = await classifyMessage(text);
@@ -539,50 +675,86 @@ async function handleMessage(who, text, msg) {
       logError({ origen: 'sistema', error: 'productos.json falta o está vacío', cliente: who.phone });
       return startHandoff(who, msg, 'Pide la carta y productos.json no está disponible', text);
     }
-    case 'pedido':         return startOrder(who, res, text, msg);
+    case 'estado': {
+      const list = activeOrdersOf(who);
+      if (list.length) return reply(msg, orderStatusText(list), who);
+      return startHandoff(who, msg, 'Pregunta por un pedido que el bot no encuentra', text);
+    }
+    case 'pedido':         return startOrder(who, res, text, msg, ctx);
     default:               return startHandoff(who, msg, res.motivo || 'La IA no sabe responder', text);
   }
 }
 
-async function startOrder(who, res, text, msg) {
+/** Revisa artículos contra la carta. Devuelve { articulos, aviso } o null si no queda nada que pedir. */
+function reviewItems(order, articulos) {
+  const r = catalog.checkItems(articulos);
+  if (r.desconocidos.length) markForReview(order, `Producto no reconocido: ${r.desconocidos.join(', ')}`);
+  const aviso = r.agotados.length ? `😔 Lo siento, hoy no nos quedan: *${r.agotados.join(', ')}*.` : '';
+  return { articulos: r.articulos, aviso, agotados: r.agotados };
+}
+
+function pendingPins() { return [...pendingDay.values()].map(p => p.order.pin); }
+
+async function startOrder(who, res, text, msg, ctx = {}) {
   const order = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    pin: genPin(orders),
+    pin: genPin(orders, pendingPins()),
     cliente: res.pedido.cliente ?? 'Cliente',
     dia: null, diaLargo: null, diaCorto: null,
-    articulos: res.pedido.articulos,
+    articulos: [],
     revisar: false, motivoRevision: null,
-    mensajeOriginal: text,
+    mensajeOriginal: ctx.audio ? `🎤 ${text}` : text,
+    porAudio: Boolean(ctx.audio),
     createdAt: new Date().toISOString(),
     status: 'pending',
     printError: null,
     sender: who.phone,
+    chatId: msg.from,
   };
   // El registro en fallos_bot.jsonl lo hace startHandoff al finalizar el pedido.
   if (res.revisar) markForReview(order, res.motivo || 'Revisar pedido');
+  const checked = reviewItems(order, res.pedido.articulos);
+  order.articulos = checked.articulos;
+  if (!order.articulos.length) {
+    // Todo lo que pidió está agotado: no hay pedido que registrar.
+    return reply(msg, `${checked.aviso}\n\nSi quieres pedir otra cosa, escríbenos. También puedes pedirme la *carta*.`, who);
+  }
+  const avisoAgotados = checked.aviso ? checked.aviso + '\n\n' : '';
 
   const days = schedule.getPickupDays(7);
-  let prefix = '';
+  let prefix = avisoAgotados;
   // Si ya dijo el día en el propio pedido ("para el lunes"), no se le pregunta.
   if (res.pedido.dia_texto) {
     const r = schedule.parseDayAnswer(res.pedido.dia_texto, days, new Date(), { allowOptionNumber: false });
     if (r?.key) {
       setOrderDay(order, r.key);
-      return finalizeAndPrintOrder(order, msg, who);
+      return finalizeAndPrintOrder(order, msg, who, { prefix: avisoAgotados });
     }
-    if (r?.closed) prefix = closedDayText(r) + '\n\n';
+    if (r?.closed) prefix += closedDayText(r) + '\n\n';
   }
 
   setPendingDay(who.key, { who, chatId: msg.from, order, days, attempts: 0, target: msg });
   log('DIA', `${who.phone}: pedido a la espera de elegir día`);
-  await reply(msg, prefix + schedule.pickupDaysMessage(days), who);
+  const heard = ctx.audio ? `🎤 He entendido tu audio así:\n${order.articulos.map(a => `• ${a.cantidad ? a.cantidad + ' ' : ''}${a.producto}`).join('\n')}\n\n` : '';
+  await reply(msg, heard + prefix + schedule.pickupDaysMessage(days), who);
 }
 
-async function handleDayAnswer(who, text, msg) {
+const CANCEL_RE = /\b(cancela\w*|anula\w*|olvidalo|olvida\w*|dejalo|ya no (?:lo|la|los|las)? ?quiero|no quiero nada|mejor no|borra\w*)\b/;
+
+async function handleDayAnswer(who, text, msg, ctx = {}) {
   const item = pendingDay.get(who.key);
   item.target = msg;
   item.chatId = msg.from;
+  item.order.chatId = msg.from;
   const again = () => schedule.pickupDaysMessage(item.days);
+  const norm = String(text).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+  // "Cancela", "déjalo", "ya no lo quiero": se anula el pedido a medias.
+  if (CANCEL_RE.test(norm) && !/\bno\s+cancel/.test(norm)) {
+    cancelPendingDay(who.key);
+    log('DIA', `${who.phone}: pedido anulado por el cliente ("${text}")`);
+    return reply(msg, MSG.anulado, who);
+  }
 
   // Solo se toma directamente como día si el mensaje no trae nada más.
   // "También quiero 1 de albóndigas" pasa por la IA aunque contenga un número.
@@ -603,26 +775,36 @@ async function handleDayAnswer(who, text, msg) {
     log('DIA', `${who.phone}: "${text}" no es solo un día → ${res?.tipo ?? 'IA no disponible'}`);
 
     if (res?.tipo === 'pedido' && res.pedido?.articulos?.length) {
-      // Añade al pedido en curso lo que pida de más.
-      item.order.articulos.push(...res.pedido.articulos);
-      item.order.mensajeOriginal += `\n${text}`;
+      // Añade al pedido en curso lo que pida de más (revisado contra la carta).
       if (res.revisar) markForReview(item.order, res.motivo || 'Revisar pedido');
+      const checked = reviewItems(item.order, res.pedido.articulos);
+      item.order.articulos.push(...checked.articulos);
+      item.order.mensajeOriginal += `\n${ctx.audio ? '🎤 ' : ''}${text}`;
+      if (ctx.audio) item.order.porAudio = true;
       savePending();
-      log('DIA', `${who.phone}: añadidos ${res.pedido.articulos.map(a => `${a.cantidad} ${a.producto}`).join(', ')}`);
-      const added = res.pedido.articulos.map(a => `• ${a.cantidad ? a.cantidad + ' ' : ''}${a.producto}`).join('\n');
+      log('DIA', `${who.phone}: añadidos ${checked.articulos.map(a => `${a.cantidad} ${a.producto}`).join(', ') || 'nada (agotado)'}`);
+      const added = checked.articulos.length
+        ? `➕ Añadido a tu pedido:\n${checked.articulos.map(a => `• ${a.cantidad ? a.cantidad + ' ' : ''}${a.producto}`).join('\n')}\n\n`
+        : '';
+      const aviso = checked.aviso ? `${checked.aviso}\n\n` : '';
       // "También 1 de albóndigas para el martes": añade y cierra con ese día.
       const diaDirecto = res.pedido.dia_texto && schedule.parseDayAnswer(res.pedido.dia_texto, item.days, new Date(), { allowOptionNumber: false });
       if (diaDirecto?.key) {
         cancelPendingDay(who.key);
         setOrderDay(item.order, diaDirecto.key);
-        return finalizeAndPrintOrder(item.order, msg, who);
+        return finalizeAndPrintOrder(item.order, msg, who, { prefix: aviso });
       }
       const resumen = item.order.articulos.map(a => `• ${a.cantidad ? a.cantidad + ' ' : ''}${a.producto}`).join('\n');
       const cierre = diaDirecto?.closed ? `${closedDayText(diaDirecto)}\n\n` : '';
-      return reply(msg, `➕ Añadido a tu pedido:\n${added}\n\n🧾 Tu pedido ahora:\n${resumen}\n\n${cierre}${again()}`, who);
+      return reply(msg, `${added}${aviso}🧾 Tu pedido ahora:\n${resumen}\n\n${cierre}${again()}`, who);
     }
     if (res?.tipo === 'horario') { await reply(msg, schedule.hoursReply(), who); return reply(msg, again(), who); }
     if (res?.tipo === 'carta' && catalog.menuMessage()) { await reply(msg, catalog.menuMessage(), who); return reply(msg, again(), who); }
+    if (res?.tipo === 'estado') {
+      const list = activeOrdersOf(who);
+      const head = list.length ? orderStatusText(list) + '\n\n' : '';
+      return reply(msg, `${head}Del pedido que estás haciendo ahora solo falta el día de recogida.\n\n${again()}`, who);
+    }
     if (res?.tipo === 'saludo' || res?.tipo === 'agradecimiento') {
       return reply(msg, `Tu pedido está casi listo, solo falta el día de recogida.\n\n${again()}`, who);
     }
@@ -655,17 +837,24 @@ async function handleDayAnswer(who, text, msg) {
   await reply(msg, `${head}\n\n${again()}`, who);
 }
 
-async function finalizeAndPrintOrder(record, target, who, { handoffMotivo, handoffTexto, categoria = 'pedido_dudoso' } = {}) {
+/** Guarda el pedido, lo muestra en el panel y lo manda a imprimir (sin escribir al cliente). */
+function registerOrder(record) {
+  if (orders.has(record.id)) return;
   orders.set(record.id, record);
   saveOrders(orders);
   broadcast('new_order', record);
-  log('PEDIDO', `PIN ${record.pin} · ${record.sender} · ${record.diaLargo || 'sin día'}${record.revisar ? ' · REVISAR' : ''}`);
+  log('PEDIDO', `PIN ${record.pin} · ${record.sender} · ${record.diaLargo || 'sin día'}${record.revisar ? ' · REVISAR' : ''}${record.porAudio ? ' · audio' : ''}`);
+  printOrder(record); // en segundo plano
+}
 
-  // Primero se confirma al cliente y después se imprime: una impresora lenta,
-  // sin papel o atascada nunca debe dejar al cliente sin respuesta.
+async function finalizeAndPrintOrder(record, target, who, { handoffMotivo, handoffTexto, categoria = 'pedido_dudoso', prefix = '' } = {}) {
+  if (!record.chatId) record.chatId = target?.from || target?.chatId || null;
+  registerOrder(record);
+
+  // Se confirma al cliente; la impresión va en segundo plano y nunca retrasa la respuesta.
   const lista = record.articulos.map(a => `• ${a.cantidad ? a.cantidad + ' ' : ''}${a.producto}`).join('\n');
   const diaTexto = record.dia ? `\n\n📅 Recogida: *${record.diaLargo}*` : '';
-  let texto = `✅ ¡Pedido recibido!\n\n${lista}${diaTexto}\n\nCódigo de recogida: *${record.pin}*\nIndícalo al llegar al mostrador.`;
+  let texto = `${prefix}✅ ¡Pedido recibido!\n\n${lista}${diaTexto}\n\nCódigo de recogida: *${record.pin}*\nIndícalo al llegar al mostrador. Te avisaremos por aquí cuando esté listo.`;
   if (record.revisar) texto += `\n\n${MSG.relevoPedido}`;
   const sent = await reply(target, texto, who);
 
@@ -674,8 +863,6 @@ async function finalizeAndPrintOrder(record, target, who, { handoffMotivo, hando
     await startHandoff(who, target, handoffMotivo || record.motivoRevision || (sent ? 'Pedido para revisar' : 'No se pudo enviar la confirmación del pedido'),
       handoffTexto || record.mensajeOriginal, null, sent ? categoria : 'error_interno');
   }
-
-  printOrder(record); // en segundo plano
 }
 
 async function printOrder(record) {

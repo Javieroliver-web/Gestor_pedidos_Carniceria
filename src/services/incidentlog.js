@@ -61,11 +61,18 @@ function readRecent(kind, limit = 200) {
   }
 }
 
+const summaryCache = {};
+
 /** Contadores de warnings y errores, en total y de hoy, desglosados por categoría. */
 function logSummary() {
   const todayKey = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Madrid' }).format(new Date());
   const dayOf = iso => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Madrid' }).format(new Date(iso));
   const count = (kind, field, labels) => {
+    // El panel lo pide cada 5 s: solo se relee el archivo si ha cambiado (o si cambia el día).
+    let mtime = 0;
+    try { mtime = fs.statSync(FILES[kind]).mtimeMs; } catch {}
+    const c = summaryCache[kind];
+    if (c && c.mtime === mtime && c.day === todayKey) return c.value;
     const out = { total: 0, hoy: 0, ultima: null, categorias: {} };
     for (const [k, label] of Object.entries(labels)) out.categorias[k] = { etiqueta: label, total: 0, hoy: 0 };
     let lines = [];
@@ -79,6 +86,7 @@ function logSummary() {
       if (isToday) { out.hoy++; out.categorias[cat].hoy++; }
       out.ultima = e.fecha || out.ultima;
     }
+    summaryCache[kind] = { mtime, day: todayKey, value: out };
     return out;
   };
   return {

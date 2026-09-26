@@ -4,7 +4,18 @@
   "description": "Servicio automático de gestión de pedidos WhatsApp para carnicería",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --test",
+    "verificar": "node scripts/verificar.js",
+    "comprobar": "npm run verificar && npm test",
+    "bot:arrancar": "pm2 start ecosystem.config.js && pm2 save",
+    "bot:reiniciar": "pm2 restart carniceria-bot",
+    "bot:parar": "pm2 stop carniceria-bot",
+    "bot:estado": "pm2 status",
+    "bot:logs": "pm2 logs carniceria-bot --lines 60",
+    "bot:logs:ultimos": "pm2 logs carniceria-bot --lines 60 --nostream",
+    "bot:guardar": "pm2 save",
+    "actualizar": "npm run comprobar && pm2 restart carniceria-bot"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

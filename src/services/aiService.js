@@ -3,22 +3,24 @@
 // para el cliente: todos los textos que se envían son plantillas fijas del código.
 // Así no puede inventarse precios, productos ni horarios.
 const Groq = require('groq-sdk');
+const { toFile } = require('groq-sdk');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { GROQ_API_KEY, GEMINI_API_KEY, GROQ_MODEL, GEMINI_MODEL } = require('../config');
+const { GROQ_API_KEY, GEMINI_API_KEY, GROQ_MODEL, GEMINI_MODEL, WHISPER_MODEL } = require('../config');
 
 const groq = new Groq({ apiKey: GROQ_API_KEY });
 const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
 const geminiModel = genAI ? genAI.getGenerativeModel({ model: GEMINI_MODEL }) : null;
 
-const TIPOS = ['saludo', 'agradecimiento', 'horario', 'carta', 'pedido', 'relevo'];
+const TIPOS = ['saludo', 'agradecimiento', 'horario', 'carta', 'estado', 'pedido', 'relevo'];
 
 // ── Métricas para el panel de desarrolladores (en memoria, se reinician con el proceso) ──
 const stats = {
   inicio: new Date().toISOString(),
   groq:   { modelo: GROQ_MODEL, llamadas: 0, errores: 0, ultimaLatenciaMs: null, ultimaLlamada: null, ultimoError: null, tokensUsados: 0, limites: null },
   gemini: { modelo: GEMINI_MODEL, activo: Boolean(geminiModel), llamadas: 0, errores: 0, ultimaLatenciaMs: null, ultimaLlamada: null, ultimoError: null, tokensUsados: 0 },
+  audio: { modelo: WHISPER_MODEL, transcripciones: 0, errores: 0, segundos: 0, ultimoError: null },
   fallbacks: 0,
-  clasificaciones: { saludo: 0, agradecimiento: 0, horario: 0, carta: 0, pedido: 0, relevo: 0 },
+  clasificaciones: { saludo: 0, agradecimiento: 0, horario: 0, carta: 0, estado: 0, pedido: 0, relevo: 0 },
   respuestasInvalidas: 0,
 };
 
@@ -63,10 +65,26 @@ const SYSTEM_PROMPT =
   '- "agradecimiento": solo da las gracias o se despide.\n' +
   '- "horario": pregunta por el horario, si está abierto, cuándo abre o cierra, si abre hoy o un día concreto.\n' +
   '- "carta": pide la carta, la lista de productos o de elaborados, o pregunta qué tenéis / qué vendéis en general.\n' +
+  '- "estado": pregunta si su pedido ya está listo o cómo va ("¿está ya lo mío?", "¿puedo pasar ya?", "¿tenéis lo mío?"), sin pedir nada nuevo.\n' +
   '- "pedido": encarga productos de carnicería.\n' +
   '- "relevo": CUALQUIER otra cosa: precios, si hay existencias hoy de un producto concreto, ofertas, envíos a domicilio, ' +
   'modificar o cancelar un pedido, quejas, preguntas sobre un pedido anterior, textos que no entiendes, ' +
   'o cualquier caso en el que dudes. Ante la duda, SIEMPRE "relevo".\n\n' +
+  'CLIENTELA: carnicería de pueblo en Andalucía (Lora del Río). Muchos clientes son personas mayores o gente de campo ' +
+  'que escriben como hablan, sin tildes ni puntuación, en mayúsculas, con faltas o dictando por voz. Entiéndelos igual de bien:\n' +
+  '- Andaluz escrito: "pa"/"pal" = para/para el, "er" = el, "mu" = muy, "e" = de ("un kilo e carne"), "ma" = me ha, ' +
+  '"quiero" puede venir como "kiero", "echame"/"ponme"/"dame"/"apuntame"/"guardame" = quiero, "tamien"/"tb"/"tambien" = también, ' +
+  'palabras sin la "s" o la "d" final ("do kilo", "flamenquine", "empanao", "pescao", "sabao").\n' +
+  '- Saludos y cortesía de la zona NO son pedidos ni preguntas: "buenas", "wenas", "quillo/quilla", "mi arma", "hija/hijo", ' +
+  '"si dios quiere", "dios te lo pague", "muchas gracias guapa". Un mensaje solo con eso es "saludo" o "agradecimiento".\n' +
+  '- Medidas tradicionales, cópialas tal cual y NO las marques como dudosas: "un cuarto" (250 g), "cuarto y mitad" (375 g), ' +
+  '"medio kilo", "kilo y medio", "una docena", "media docena", "un par", "una bandeja", "una pieza", "un paquete", ' +
+  '"lo de siempre" (esto sí es dudoso: nadie sabe qué es lo de siempre).\n' +
+  '- Números con letra ("dos kilos", "tres filetes") son cantidades válidas.\n' +
+  '- Nombres de producto coloquiales o mal escritos (flamenquin/flamenkin, albondiga/armondigas, chuleta/chuleta, ' +
+  'pinchito/pincho moruno, lomo en manteca, pringá, carne de puchero, avíos del puchero, carne pa guisar/pa estofao, ' +
+  'costilla, panceta/tocino, pollo de campo, choto) son productos normales de carnicería: extráelos con la palabra corregida.\n' +
+  '- Solo marca "dudoso" cuando de verdad no se sabe QUÉ producto es o CUÁNTO quiere, no por cómo está escrito.\n\n' +
   'Reglas para "pedido":\n' +
   '- Copia productos y cantidades tal como los escribe el cliente; no completes, no corrijas, no inventes cantidades.\n' +
   '- Si falta la cantidad, pon "cantidad": "" y marca "dudoso": true en ese artículo.\n' +
@@ -75,7 +93,7 @@ const SYSTEM_PROMPT =
   '- "dia_texto": copia literalmente lo que diga sobre el día de recogida ("el lunes", "mañana", "el 28"), o null.\n' +
   '- "cliente": el nombre solo si lo dice, si no null.\n\n' +
   'Devuelve ÚNICAMENTE este JSON, sin texto adicional ni markdown:\n' +
-  '{"tipo":"saludo|agradecimiento|horario|carta|pedido|relevo",' +
+  '{"tipo":"saludo|agradecimiento|horario|carta|estado|pedido|relevo",' +
   '"motivo":"frase corta de por qué es relevo o qué hay que revisar, o null",' +
   '"revisar":false,' +
   '"pedido":{"cliente":null,"dia_texto":null,"articulos":[{"cantidad":"1 kg","producto":"lomo","dudoso":false}]}}\n' +
@@ -193,6 +211,38 @@ async function classifyMessage(text) {
   }
 }
 
+// ── Transcripción de notas de voz (Whisper en Groq, misma clave) ─────────────
+const WHISPER_PROMPT = 'Pedido por WhatsApp a una carnicería de Lora del Río (Sevilla). Habla andaluza. ' +
+  'Productos: lomo, chuletas, filetes de pollo, pechuga, carne picada, albóndigas, flamenquines, san jacobo, ' +
+  'pinchitos, chorizo, morcilla, costillas, secreto, presa, carrillada, pringá. Cantidades: un kilo, medio kilo, ' +
+  'un cuarto, cuarto y mitad, una docena. Días: el lunes, pal martes, mañana.';
+
+/** Devuelve el texto del audio o lanza error. buffer: Buffer del audio; mimetype: p. ej. 'audio/ogg; codecs=opus'. */
+async function transcribeAudio(buffer, mimetype = 'audio/ogg', seconds = 0) {
+  const ext = /mpeg|mp3/.test(mimetype) ? 'mp3' : /mp4|m4a|aac/.test(mimetype) ? 'm4a' : /wav/.test(mimetype) ? 'wav' : 'ogg';
+  const run = async model => {
+    const file = await toFile(buffer, `nota.${ext}`, { type: mimetype.split(';')[0] });
+    const r = await groq.audio.transcriptions.create({ file, model, language: 'es', temperature: 0, prompt: WHISPER_PROMPT, response_format: 'json' });
+    return String(r?.text || '').trim();
+  };
+  try {
+    let text;
+    try { text = await withTimeout(run(WHISPER_MODEL), 20000); }
+    catch (e) {
+      // Si el modelo configurado no existe en la cuenta, se prueba con el estándar.
+      if (WHISPER_MODEL !== 'whisper-large-v3' && /model/i.test(e.message)) text = await withTimeout(run('whisper-large-v3'), 20000);
+      else throw e;
+    }
+    stats.audio.transcripciones++;
+    stats.audio.segundos += Number(seconds) || 0;
+    return text;
+  } catch (e) {
+    stats.audio.errores++;
+    stats.audio.ultimoError = { fecha: new Date().toISOString(), mensaje: e.message };
+    throw e;
+  }
+}
+
 function getAiStats() { return JSON.parse(JSON.stringify(stats)); }
 
-module.exports = { classifyMessage, getAiStats, _validate: validate };
+module.exports = { classifyMessage, transcribeAudio, getAiStats, _validate: validate };

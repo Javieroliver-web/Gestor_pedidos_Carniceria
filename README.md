@@ -10,6 +10,11 @@ Un sistema completo de punto de venta (POS) y recepción de pedidos automatizado
 - **Día de recogida:** tras el pedido, el cliente elige entre los 7 próximos días de apertura (sin domingos ni festivos de `festivos.json`).
 - **La IA no redacta respuestas:** solo clasifica (saludo, horario, carta, pedido o relevo). Todos los textos al cliente son plantillas fijas; el horario sale de `src/schedule.js` y la carta de `productos.json`.
 - **Relevo a persona:** si el bot no sabe responder, avisa al cliente y deja de contestarle hasta medianoche (o hasta pulsar "Devolver al bot" en el panel). Los pedidos dudosos se registran marcados como *Revisar*.
+- **Notas de voz:** se transcriben con Whisper (Groq, misma clave) y siguen el flujo normal; el cliente ve lo que se ha entendido.
+- **El dueño contesta a mano:** si alguien escribe desde el móvil de la tienda en un chat, el bot se aparta de esa conversación hasta medianoche.
+- **Carta y agotados:** cada producto pedido se comprueba contra `productos.json` (elaborados + palabras de carne fresca). Lo desconocido se marca para revisar; lo agotado se avisa y no entra en el pedido. Los agotados se marcan desde el botón *Carta* del panel.
+- **Aviso de pedido listo:** al pulsar *Listo* en el panel, el cliente recibe un WhatsApp.
+- **Modo pruebas:** la impresión automática se puede desactivar desde el panel (franja roja mientras está apagada).
 - **Registros:** `logs/fallos_bot.jsonl` (warnings: mensajes que el bot no resolvió) y `logs/errores.jsonl` (errores técnicos), visibles en el panel en *Incidencias* e *Información para desarrolladores*.
 
 ---
@@ -22,6 +27,9 @@ Gestor_pedidos_Carniceria/
 ├── dashboard.html        ← Panel de control frontend (http://localhost:3000)
 ├── package.json          ← Dependencias del proyecto
 ├── ecosystem.config.js   ← Configuración de despliegue para PM2
+├── scripts/verificar.js  ← Comprueba que todos los archivos están bien (npm run verificar)
+├── test/                ← Pruebas automáticas (npm test)
+├── .vscode/tasks.json    ← Comandos del proyecto como tareas de VS Code
 ├── .env                  ← Variables de entorno (crear a partir de .env.example)
 ├── .env.example          ← Plantilla de configuración
 ├── festivos.json         ← Festivos y cierres (editable sin reiniciar)
@@ -29,7 +37,8 @@ Gestor_pedidos_Carniceria/
 ├── src/
 │   ├── config.js         ← Variables de entorno y persistencia
 │   ├── schedule.js       ← Horario, días de recogida y respuestas de horario
-│   ├── catalog.js        ← Carta de productos
+│   ├── catalog.js        ← Carta, reconocimiento de productos y agotados
+│   ├── storage.js        ← Guardado seguro de los JSON (no se corrompen con un apagón)
 │   └── services/         ← IA, impresión y registros de incidencias
 │
 │   (Se generan automáticamente en ejecución)
@@ -116,6 +125,31 @@ Cliente (WhatsApp)
         ├── Panel Web (Actualiza el DOM en vivo)
         └── WhatsApp (Responde al cliente con su PIN de recogida)
 ```
+
+---
+
+## Comandos del proyecto
+Todos se lanzan desde la carpeta del proyecto con `npm run <comando>`, o en VS Code con **Ctrl+Shift+P → Tasks: Run Task** (Ctrl+Shift+B = *Actualizar bot*).
+
+| Comando | Qué hace |
+|---|---|
+| `npm run actualizar` | Verifica archivos, pasa las pruebas y reinicia el bot. **Úsalo después de copiar cambios.** |
+| `npm run verificar` | Comprueba que cada archivo está en su sitio, no está vacío, es la versión actual y los JSON no están dañados |
+| `npm test` | Pruebas automáticas (horario, días, carta) |
+| `npm run comprobar` | `verificar` + `test` |
+| `npm run bot:reiniciar` | Reinicia el bot en PM2 |
+| `npm run bot:estado` | Estado del proceso (columna ↺ = reinicios) |
+| `npm run bot:logs:ultimos` | Últimas 60 líneas del log (para pegar a Claude) |
+| `npm run bot:logs` | Log en directo (Ctrl+C para salir) |
+| `npm run bot:arrancar` | Primera vez: registra el bot en PM2 y lo guarda |
+| `npm run bot:parar` | Para el bot |
+| `npm start` | Arranca sin PM2 (para ver el QR en consola) |
+
+## Pruebas automáticas
+```powershell
+npm test
+```
+Comprueban el horario, la elección de día (incluida el habla andaluza) y el reconocimiento de productos. Pásalas después de tocar `schedule.js`, `catalog.js` o `productos.json`.
 
 ---
 
