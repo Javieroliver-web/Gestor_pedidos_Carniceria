@@ -5,19 +5,46 @@
 const Groq = require('groq-sdk');
 const { toFile } = require('groq-sdk');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { GROQ_API_KEY, GEMINI_API_KEY, GROQ_MODEL, GEMINI_MODEL, WHISPER_MODEL } = require('../config');
+const {
+  GROQ_API_KEY, GEMINI_API_KEY, GROQ_MODEL, GEMINI_MODEL, WHISPER_MODEL, log,
+  getModeloGuardado, guardarModelo,
+} = require('../config');
+const { GestorModelo, elegirGemini, elegirGroq } = require('./modelUpdater');
 
 const groq = new Groq({ apiKey: GROQ_API_KEY });
 const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
-const geminiModel = genAI ? genAI.getGenerativeModel({ model: GEMINI_MODEL }) : null;
+// Si Groq o Google retiran el modelo, se busca el sucesor, se guarda en
+// config.json, se avisa en el log y se reintenta (ver modelUpdater.js). Antes
+// el respaldo apuntó a gemini-1.5-flash, retirado, y fallaba sin que se viera.
+const modeloGroq = new GestorModelo({
+  proveedor: 'Groq', configurado: GROQ_MODEL, guardado: getModeloGuardado('groq'),
+  listar: async () => (await groq.models.list()).data || [],
+  elegir: elegirGroq, guardar: v => guardarModelo('groq', v), log,
+});
+const modeloGemini = genAI ? new GestorModelo({
+  proveedor: 'Gemini', configurado: GEMINI_MODEL, guardado: getModeloGuardado('gemini'),
+  listar: listarModelosGemini,
+  elegir: elegirGemini, guardar: v => guardarModelo('gemini', v), log,
+}) : null;
+const geminiModel = Boolean(modeloGemini);
+
+async function listarModelosGemini() {
+  // La clave va en cabecera y no en la URL, para que no acabe en ningún log.
+  const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000', {
+    headers: { 'x-goog-api-key': GEMINI_API_KEY },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return (await res.json()).models || [];
+}
 
 const TIPOS = ['saludo', 'agradecimiento', 'horario', 'carta', 'estado', 'pedido', 'relevo'];
 
 // ── Métricas para el panel de desarrolladores (en memoria, se reinician con el proceso) ──
 const stats = {
   inicio: new Date().toISOString(),
-  groq:   { modelo: GROQ_MODEL, llamadas: 0, errores: 0, ultimaLatenciaMs: null, ultimaLlamada: null, ultimoError: null, tokensUsados: 0, limites: null },
-  gemini: { modelo: GEMINI_MODEL, activo: Boolean(geminiModel), llamadas: 0, errores: 0, ultimaLatenciaMs: null, ultimaLlamada: null, ultimoError: null, tokensUsados: 0 },
+  groq:   { modelo: modeloGroq.actual(), llamadas: 0, errores: 0, ultimaLatenciaMs: null, ultimaLlamada: null, ultimoError: null, tokensUsados: 0, limites: null },
+  gemini: { modelo: modeloGemini?.actual() ?? GEMINI_MODEL, activo: Boolean(geminiModel), llamadas: 0, errores: 0, ultimaLatenciaMs: null, ultimaLlamada: null, ultimoError: null, tokensUsados: 0 },
   audio: { modelo: WHISPER_MODEL, transcripciones: 0, errores: 0, segundos: 0, ultimoError: null },
   fallbacks: 0,
   clasificaciones: { saludo: 0, agradecimiento: 0, horario: 0, carta: 0, estado: 0, pedido: 0, relevo: 0 },
@@ -143,18 +170,19 @@ async function groqClassify(text) {
   const t0 = Date.now();
   stats.groq.llamadas++;
   stats.groq.ultimaLlamada = new Date().toISOString();
-  const { data: response, response: raw } = await groq.chat.completions.create({
-    model: GROQ_MODEL,
+  const { data: response, response: raw } = await modeloGroq.ejecutar(model => groq.chat.completions.create({
+    model,
     temperature: 0,
     // gpt-oss razona antes de responder y ese razonamiento cuenta en max_tokens:
     // con un límite bajo la respuesta llegaba cortada.
     max_tokens: 2000,
-    ...(GROQ_MODEL.startsWith('openai/gpt-oss') ? { reasoning_effort: 'low' } : {}),
+    ...(model.startsWith('openai/gpt-oss') ? { reasoning_effort: 'low' } : {}),
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: `<mensaje_cliente>${text}</mensaje_cliente>` },
     ],
-  }).withResponse();
+  }).withResponse());
+  stats.groq.modelo = modeloGroq.actual();
   stats.groq.ultimaLatenciaMs = Date.now() - t0;
   stats.groq.tokensUsados += response.usage?.total_tokens ?? 0;
   stats.groq.limites = readGroqLimits(raw.headers) ?? stats.groq.limites;
@@ -165,10 +193,11 @@ async function geminiClassify(text) {
   const t0 = Date.now();
   stats.gemini.llamadas++;
   stats.gemini.ultimaLlamada = new Date().toISOString();
-  const result = await geminiModel.generateContent({
+  const result = await modeloGemini.ejecutar(model => genAI.getGenerativeModel({ model }).generateContent({
     contents: [{ role: 'user', parts: [{ text: `${SYSTEM_PROMPT}\n\n<mensaje_cliente>${text}</mensaje_cliente>` }] }],
     generationConfig: { temperature: 0, responseMimeType: 'application/json' },
-  });
+  }));
+  stats.gemini.modelo = modeloGemini.actual();
   stats.gemini.ultimaLatenciaMs = Date.now() - t0;
   stats.gemini.tokensUsados += result.response.usageMetadata?.totalTokenCount ?? 0;
   return parseJson(result.response.text());
@@ -245,4 +274,4 @@ async function transcribeAudio(buffer, mimetype = 'audio/ogg', seconds = 0) {
 
 function getAiStats() { return JSON.parse(JSON.stringify(stats)); }
 
-module.exports = { classifyMessage, transcribeAudio, getAiStats, _validate: validate };
+module.exports = { classifyMessage, transcribeAudio, getAiStats, _validate: validate, modeloGroq, modeloGemini };

@@ -21,6 +21,10 @@ const ARCHIVOS = {
   'src/services/printService.js': 'fitLabel',
   'test/schedule.test.js': 'albondigas',
   'test/catalog.test.js': 'checkItems',
+  'src/panelAuth.js': 'protegerPanel',
+  'src/csrf.js': 'crearFrenoPanel',
+  'src/limitador.js': 'crearLimitador',
+  'src/services/modelUpdater.js': 'GestorModelo',
 };
 
 let fallos = 0;

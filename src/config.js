@@ -9,14 +9,25 @@ const {
   PRINTER_INTERFACE = 'Brother TD-4000',
   SHOP_NAME         = 'CARNICERÍA RAÚL OLIVER',
   PORT              = '3000',
-  HOST              = '127.0.0.1',
-  GROQ_MODEL        = 'openai/gpt-oss-120b',
-  GEMINI_MODEL      = 'gemini-2.5-flash',
-  WHISPER_MODEL     = 'whisper-large-v3-turbo',
+  // Por defecto SOLO este PC. Con 0.0.0.0 y sin contraseña cualquiera en el
+  // wifi de la tienda veía los pedidos (con datos de clientes), podía
+  // descartarlos o desvincular WhatsApp (revisión de seguridad del 23/09/2026).
+  HOST: HOST_PEDIDO = '127.0.0.1',
+  // Contraseña del panel. Obligatoria para abrirlo a la red (HOST=0.0.0.0).
+  PANEL_PASSWORD    = '',
   // Transcribir notas de voz (on/off) y duración máxima en segundos
   AUDIO_TRANSCRIPTION = 'on',
   AUDIO_MAX_SECONDS   = '120',
 } = process.env;
+
+// «|| defecto»: una línea vacía en el .env (GEMINI_MODEL=) deja '' y no undefined.
+const GROQ_MODEL    = process.env.GROQ_MODEL    || 'openai/gpt-oss-120b';
+const GEMINI_MODEL  = process.env.GEMINI_MODEL  || 'gemini-2.5-flash';
+const WHISPER_MODEL = process.env.WHISPER_MODEL || 'whisper-large-v3-turbo';
+
+const ES_LOCAL = ['127.0.0.1', 'localhost', '::1'].includes(HOST_PEDIDO);
+// Abrir a la red sin contraseña no se permite: se queda en este PC y se avisa.
+const HOST = (!ES_LOCAL && !PANEL_PASSWORD) ? '127.0.0.1' : HOST_PEDIDO;
 
 if (!GROQ_API_KEY) {
   console.error('[ERROR] Falta GROQ_API_KEY en .env');
@@ -80,7 +91,7 @@ function genPin(ordersMap, extraInUse = []) {
 module.exports = {
   GROQ_API_KEY, GEMINI_API_KEY, GROQ_MODEL, GEMINI_MODEL, WHISPER_MODEL,
   AUDIO_TRANSCRIPTION: AUDIO_TRANSCRIPTION !== 'off', AUDIO_MAX_SECONDS: Number(AUDIO_MAX_SECONDS) || 120,
-  SHOP_NAME, PORT, HOST, log,
+  SHOP_NAME, PORT, HOST, HOST_PEDIDO, ES_LOCAL, PANEL_PASSWORD, log,
   loadConfig, saveConfig, loadOrders, saveOrders,
   getPrinterName, genPin,
   getCurrentPrinter: () => currentPrinter,
@@ -99,6 +110,13 @@ module.exports = {
     if (profile) printerProfiles[iface] = profile;
     config.activePrinter = currentPrinter;
     config.profiles = printerProfiles;
+    saveConfig(config);
+  },
+  // Modelo de IA que sustituyó a uno retirado (src/services/modelUpdater.js).
+  // Va en el mismo objeto que la impresora para que un guardado no borre el otro.
+  getModeloGuardado: (proveedor) => config.modelosIA?.[proveedor] ?? null,
+  guardarModelo: (proveedor, valor) => {
+    config.modelosIA = { ...(config.modelosIA || {}), [proveedor]: valor };
     saveConfig(config);
   }
 };

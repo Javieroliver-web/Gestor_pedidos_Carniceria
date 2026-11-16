@@ -394,6 +394,9 @@ body { font-family: system-ui,-apple-system,sans-serif; background:var(--bg); co
 </div>
 
 <script>
+// El servidor rechaza los POST sin esta cabecera (freno a otras webs, src/csrf.js).
+const _fetch = window.fetch.bind(window);
+window.fetch = (url, opts = {}) => _fetch(url, { ...opts, headers: { ...(opts.headers || {}), 'X-Panel': '1' } });
 // ── State ─────────────────────────────────────────────────────────────────────
 const store = new Map();
 let tab = 'active', soundOn = true;

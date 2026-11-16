@@ -79,9 +79,12 @@ PRINTER_INTERFACE=Brother XXXXXXX
 SHOP_NAME="CARNICERÍA RAÚL OLIVER"
 PORT=3000
 # 127.0.0.1 = solo este PC. 0.0.0.0 abre el panel a toda la red local,
-# y el panel NO pide contraseña: úsalo solo en una red de confianza.
+# pero SOLO si también pones PANEL_PASSWORD (usuario: panel).
 HOST=127.0.0.1
+PANEL_PASSWORD=
 ```
+
+Si Groq o Google retiran el modelo de IA configurado, el bot busca el sucesor por su cuenta, lo guarda en `config.json` y lo avisa en el log (`npm run bot:logs`). Para elegir uno a mano, pon `GROQ_MODEL` o `GEMINI_MODEL` en el `.env`.
 
 ### 5. Primera ejecución y vinculación
 ```powershell

@@ -6,7 +6,7 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 
 const {
-  SHOP_NAME, PORT, HOST, log,
+  SHOP_NAME, PORT, HOST, HOST_PEDIDO, ES_LOCAL, PANEL_PASSWORD, log,
   loadOrders, saveOrders,
   getCurrentPrinter, getProfiles, savePrinterConfig,
   isPrintingEnabled, setPrintingEnabled, getPrintingChangedAt,
@@ -19,6 +19,17 @@ const { logFallo, logError, readRecent, logSummary } = require('./src/services/i
 const schedule = require('./src/schedule');
 const catalog = require('./src/catalog');
 const { writeJsonAtomic, readJson } = require('./src/storage');
+const { protegerPanel } = require('./src/panelAuth');
+const { crearFrenoPanel } = require('./src/csrf');
+const { crearLimitador } = require('./src/limitador');
+
+// Freno a quien manda muchísimos mensajes (cada uno gasta cupo de Groq): al
+// pasarse pasa a una persona, que no imprime nada, en vez de seguir creando
+// pedidos o tarjetas (revisión de seguridad del 16/11/2026).
+const permitirMensaje = crearLimitador(20, 10 * 60 * 1000);
+// Más pedidos abiertos que esto a la vez desde un mismo número es raro: lo
+// revisa una persona para que nadie llene la impresora ni agote los PIN.
+const MAX_PEDIDOS_ABIERTOS = 5;
 
 // ── Textos fijos que recibe el cliente (la IA nunca redacta respuestas) ──────
 const MSG = {
@@ -111,6 +122,9 @@ function broadcast(event, data) { for (const res of sseClients) sseWrite(res, ev
 
 // ── Endpoints Express ────────────────────────────────────────────────────────
 const app = express();
+const proteccion = protegerPanel(PANEL_PASSWORD);
+if (proteccion) app.use(proteccion);
+app.use(crearFrenoPanel({ port: PORT, soloLocal: ES_LOCAL || HOST === '127.0.0.1' }));
 app.use(express.json());
 
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'dashboard.html')));
@@ -342,7 +356,15 @@ app.post('/api/whatsapp/reset', async (_req, res) => {
 });
 
 // Antes escuchaba siempre en 0.0.0.0 aunque .env dijera HOST=127.0.0.1.
-app.listen(Number(PORT), HOST, () => log('WEB', `Panel disponible en http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}${HOST === '0.0.0.0' ? ' (expuesto a la red local, sin contraseña)' : ''}`));
+app.listen(Number(PORT), HOST, () => {
+  log('WEB', `Panel disponible en http://localhost:${PORT}`);
+  if (HOST !== HOST_PEDIDO) {
+    log('WARN', `HOST=${HOST_PEDIDO} abriría el panel a la red SIN contraseña: me quedo solo en este PC.`);
+    log('WARN', 'Para abrirlo a la red, pon también PANEL_PASSWORD en el .env (usuario: panel).');
+  } else if (!ES_LOCAL) {
+    log('WEB', 'Panel abierto a la red local, protegido con PANEL_PASSWORD (usuario: panel).');
+  }
+});
 
 // ── WhatsApp ─────────────────────────────────────────────────────────────────
 const BROWSER_PATHS = [
@@ -576,6 +598,19 @@ client.on('message', async msg => {
   let fromAudio = false;
   const inHandoff = isInHandoff(who.key);
 
+  // Antes de gastar IA (ni siquiera en transcribir un audio): si se pasa del
+  // límite, una persona y punto. El relevo dura hasta medianoche, así que los
+  // mensajes siguientes ya no llegan aquí y no se imprime nada.
+  if (!inHandoff && !permitirMensaje(who.key)) {
+    log('WARN', `${who.phone}: demasiados mensajes seguidos, pasa a una persona.`);
+    // Se vuelve a mirar dentro de la cola: con 30 mensajes de golpe todos llegan
+    // aquí antes de que se guarde el primer relevo, y cada uno mandaba su aviso.
+    return enqueue(who.key, async () => {
+      if (isInHandoff(who.key)) return;
+      await startHandoff(who, msg, 'Demasiados mensajes seguidos', body.slice(0, 300) || `[${msg.type}]`, MSG.relevo, 'limite_mensajes');
+    });
+  }
+
   // Notas de voz: se transcriben y siguen el flujo normal como si fueran texto.
   if (!inHandoff && AUDIO_TYPES.includes(msg.type)) {
     const seconds = Number(msg.duration) || 0;
@@ -680,7 +715,11 @@ async function handleMessage(who, text, msg, ctx = {}) {
       if (list.length) return reply(msg, orderStatusText(list), who);
       return startHandoff(who, msg, 'Pregunta por un pedido que el bot no encuentra', text);
     }
-    case 'pedido':         return startOrder(who, res, text, msg, ctx);
+    case 'pedido':
+      if (activeOrdersOf(who).length >= MAX_PEDIDOS_ABIERTOS) {
+        return startHandoff(who, msg, `Ya tiene ${MAX_PEDIDOS_ABIERTOS} pedidos abiertos`, text, MSG.relevoPedido, 'demasiados_pedidos');
+      }
+      return startOrder(who, res, text, msg, ctx);
     default:               return startHandoff(who, msg, res.motivo || 'La IA no sabe responder', text);
   }
 }
