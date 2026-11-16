@@ -16,8 +16,10 @@
 body { font-family: system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; font-size:14px; }
 
 /* HEADER */
-.header { background:var(--header); color:#fff; padding:0 20px; height:54px; display:flex; align-items:center; justify-content:space-between; gap:16px; position:sticky; top:0; z-index:100; }
-.header-left  { display:flex; align-items:center; gap:14px; min-width:0; }
+/* Si los botones no caben, pasan a otra línea en vez de montarse unos encima
+   de otros (pasaba entre 760 y ~1150 px de ancho). */
+.header { background:var(--header); color:#fff; padding:8px 20px; min-height:54px; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 16px; position:sticky; top:0; z-index:100; }
+.header-left  { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; min-width:0; }
 .shop-name    { font-size:14px; font-weight:700; letter-spacing:.4px; white-space:nowrap; }
 
 .hbtn { background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); color:rgba(255,255,255,.9); padding:5px 11px; border-radius:6px; cursor:pointer; font-size:12px; font-weight:500; font-family:inherit; transition:background .15s; display:flex; align-items:center; gap:6px; white-space:nowrap; }
@@ -31,7 +33,9 @@ body { font-family: system-ui,-apple-system,sans-serif; background:var(--bg); co
 .status-dot.red { background:#f87171; }
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
 
-.header-right { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+/* Puede encogerse y repartirse en varias líneas: con flex-shrink:0 en móvil se
+   salía por la derecha y la página entera se movía de lado. */
+.header-right { display:flex; flex-wrap:wrap; align-items:center; gap:8px; min-width:0; }
 .clock { font-family:'Courier New',monospace; font-size:17px; font-weight:700; color:#fff; letter-spacing:1px; min-width:52px; text-align:right; }
 
 /* STATS */
@@ -192,8 +196,11 @@ body { font-family: system-ui,-apple-system,sans-serif; background:var(--bg); co
 .switch .sl::before { content:''; position:absolute; width:18px; height:18px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; }
 .switch input:checked + .sl { background:var(--green); }
 .switch input:checked + .sl::before { transform:translateX(20px); }
-.show-sm { display:none; }
+.show-sm, .show-md { display:none; }
 @media (max-width: 760px) { .show-sm { display:inline; } }
+/* «Información para desarrolladores» es el texto más largo de la cabecera:
+   en pantallas medianas se queda en «Dev». */
+@media (max-width: 1200px) { .hbtn .hide-md { display:none; } .show-md { display:inline; } }
 .dev-panel { position:absolute; top:calc(100% + 10px); left:0; width:380px; max-width:calc(100vw - 24px); max-height:calc(100vh - 80px); overflow-y:auto; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:12px; box-shadow:0 12px 40px rgba(0,0,0,.25); z-index:150; padding:14px; display:none; font-size:12px; }
 .dev-panel.open { display:block; animation:slideUp .15s ease; }
 .dev-sec { margin-bottom:14px; }
@@ -243,7 +250,7 @@ body { font-family: system-ui,-apple-system,sans-serif; background:var(--bg); co
     <div class="dev-wrap">
       <button class="hbtn" id="devBtn" onclick="toggleDev(event)" title="Estado de la IA, registros y sistema">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
-        <span class="hide-sm">Información para desarrolladores</span><span class="show-sm">Dev</span>
+        <span class="hide-md">Información para desarrolladores</span><span class="show-md">Dev</span>
         <span class="tab-badge" id="devBadge" style="display:none">0</span>
       </button>
       <div class="dev-panel" id="devPanel" onclick="event.stopPropagation()"><div style="color:var(--text3)">Cargando...</div></div>
